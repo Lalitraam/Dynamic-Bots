@@ -1,0 +1,47 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+
+# IDE and Editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.gemini/
+
+# Text files and scratch files (requested)
+*.txt
+scratch/
+
+# Project summary notes and task scratch
+[Pp][Rr][Oo][Jj][Ee][Cc][Tt]-[Ss][Uu][Mm][Mm][Aa][Rr][Yy]*.md
+[Pp][Rr][Oo][Jj][Ee][Cc][Tt]_[Ss][Uu][Mm][Mm][Aa][Rr][Yy]*.md
+
+# Large player data artifacts, parquet tables, raw jsonl, and model weights
+data/
+backend/data/
+*.parquet
+*.pt
+*.pth
+*.jsonl
+
+# Logs and environment variables
+*.log
+.env
+.env.local
