@@ -40,7 +40,7 @@ backend/data/
 *.pt
 *.pth
 *.jsonl
-
+!backend/app/tests/fixtures/sample_games.jsonl
 # Logs and environment variables
 *.log
 .env
