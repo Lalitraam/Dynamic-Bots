@@ -1,0 +1,13 @@
+# Chess Bot Clone Factory - backend dependencies
+# Install with:  pip install -r backend/requirements.txt
+fastapi
+uvicorn
+httpx
+python-chess
+torch
+numpy
+pandas
+pyarrow
+matplotlib
+pytest
+pytest-asyncio
