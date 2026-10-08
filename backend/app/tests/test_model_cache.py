@@ -4,6 +4,7 @@ Tests for the LRU model cache (Milestone 4, Phase 2).
 Most tests use a fake loader, so they need no real model and no torch.
 The last two tests use the real loader and are skipped if torch is missing.
 """
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -195,6 +196,18 @@ def test_unexpected_loader_exception_is_wrapped(data_root):
     cache = ModelCache(loader=loader)
     with pytest.raises(ModelLoadError):
         cache.get("alice")
+
+
+def test_loader_error_text_is_logged_not_exposed(data_root, caplog):
+    make_model(data_root, "alice")
+    loader = FakeLoader()
+    loader.fail_with_plain_error.add("alice")        # raises ValueError("plain error")
+    cache = ModelCache(loader=loader)
+    with caplog.at_level(logging.ERROR, logger="app.services.model_cache"):
+        with pytest.raises(ModelLoadError) as excinfo:
+            cache.get("alice")
+    assert "plain error" not in str(excinfo.value)    # nothing internal reaches clients
+    assert "plain error" in caplog.text               # but the server log has the details
 
 
 # ---------------------------------------------------------------------------

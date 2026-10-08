@@ -2,6 +2,7 @@
 Tests for game sessions (Milestone 4, Phase 3).
 Pure python-chess + fake movers: no model, no torch, no HTTP.
 """
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -371,3 +372,64 @@ def test_failed_turn_keeps_old_temperature():
     with pytest.raises(IllegalMoveError):
         session.play_turn("e2e5", manager.mover, temperature=0.2)
     assert session.temperature == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: hardening
+# ---------------------------------------------------------------------------
+
+def test_bot_error_text_is_logged_not_exposed(caplog):
+    manager = new_manager(failing_mover)
+    session = create(manager)
+    with caplog.at_level(logging.ERROR, logger="app.services.game_sessions"):
+        with pytest.raises(BotMoveError) as excinfo:
+            session.play_turn("e2e4", manager.mover)
+    assert "model exploded" not in str(excinfo.value)
+    assert "model exploded" in caplog.text
+
+
+def test_illegal_bot_move_is_logged(caplog):
+    manager = new_manager(illegal_mover)
+    session = create(manager)
+    with caplog.at_level(logging.ERROR, logger="app.services.game_sessions"):
+        with pytest.raises(BotMoveError):
+            session.play_turn("e2e4", manager.mover)
+    assert "illegal move" in caplog.text
+
+
+def test_expired_games_are_purged_when_other_games_are_read():
+    now = [0.0]
+    manager = new_manager(clock=lambda: now[0], ttl_seconds=100)
+    create(manager)
+    create(manager)
+    keep = create(manager)
+    now[0] = 90
+    manager.get(keep.session_id)          # refresh only one
+    now[0] = 150
+    manager.get(keep.session_id)          # reading it sweeps the two idle games
+    assert len(manager) == 1
+
+
+def test_cap_holds_strictly_under_concurrent_creation():
+    def slow_bot(bot, board, meta, temperature):
+        time.sleep(0.1)
+        return next(iter(board.legal_moves))
+
+    manager = new_manager(slow_bot, max_sessions=3)
+    barrier = threading.Barrier(10)
+    outcomes = []
+
+    def start_game(_):
+        barrier.wait()
+        try:
+            create(manager, chess.BLACK)          # the bot opens, which takes a moment
+            outcomes.append("ok")
+        except SessionLimitError:
+            outcomes.append("limit")
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        list(pool.map(start_game, range(10)))
+
+    assert outcomes.count("ok") == 3
+    assert outcomes.count("limit") == 7
+    assert len(manager) == 3

@@ -28,6 +28,7 @@ Thumbs.db
 # Text files and scratch files (requested)
 *.txt
 scratch/
+!requirements.txt
 
 # Project summary notes and task scratch
 [Pp][Rr][Oo][Jj][Ee][Cc][Tt]-[Ss][Uu][Mm][Mm][Aa][Rr][Yy]*.md

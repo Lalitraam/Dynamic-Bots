@@ -327,6 +327,7 @@ def test_bot_failure_500_leaves_board_unchanged_and_retry_works(trained_player, 
 
     first = _move(game["session_id"], "e2e4")
     assert first.status_code == 500
+    assert "model exploded" not in first.text          # internals stay in the server log
     assert client.get(f"/api/play/sessions/{game['session_id']}").json() == game
 
     retry = _move(game["session_id"], "e2e4")        # exactly the same request

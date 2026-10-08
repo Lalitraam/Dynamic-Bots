@@ -29,6 +29,7 @@ move), the human's move is rolled back, so the client can simply retry.
 """
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
@@ -40,6 +41,8 @@ import chess
 
 from .. import config
 from .model_cache import LoadedBot
+
+logger = logging.getLogger(__name__)
 
 # mover(bot, board, meta_inputs, temperature) -> chess.Move
 Mover = Callable[[LoadedBot, chess.Board, dict, float], chess.Move]
@@ -222,9 +225,18 @@ class GameSession:
         try:
             move = mover(self.bot, self.board.copy(stack=False), meta, temperature)
         except Exception as exc:  # noqa: BLE001
-            raise BotMoveError(f"The bot failed to choose a move: {exc}") from exc
+            # Details go to the server log, not to the client.
+            logger.exception(
+                "Bot '%s' failed to move in game %s (%s)",
+                self.username, self.session_id, self.board.fen(),
+            )
+            raise BotMoveError("The bot failed to choose a move.") from exc
         # Safety net: never trust the bot (or a corrupt opening book) blindly.
         if not isinstance(move, chess.Move) or move not in self.board.legal_moves:
+            logger.error(
+                "Bot '%s' produced illegal move %r in game %s (%s)",
+                self.username, move, self.session_id, self.board.fen(),
+            )
             raise BotMoveError("The bot produced an illegal move.")
         return self._push(move, by="bot")
 
@@ -346,6 +358,21 @@ class SessionManager:
         with self._lock:
             return self._purge_expired_locked()
 
+    def _make_room_locked(self) -> None:
+        """
+        Ensure there is space for one more game (caller holds the lock).
+        Drops expired games first, then the oldest FINISHED game; if every
+        game is still active, raises SessionLimitError.
+        """
+        self._purge_expired_locked()
+        if len(self._sessions) < self.max_sessions:
+            return
+        finished = [s for s in self._sessions.values() if s.finished]
+        if not finished:
+            raise SessionLimitError("Too many active games right now. Try again later.")
+        oldest = min(finished, key=lambda s: s.last_active)
+        del self._sessions[oldest.session_id]
+
     def create(
         self,
         username: str,
@@ -363,13 +390,7 @@ class SessionManager:
         Raises SessionLimitError, BotMoveError.
         """
         with self._lock:
-            self._purge_expired_locked()
-            if len(self._sessions) >= self.max_sessions:
-                finished = [s for s in self._sessions.values() if s.finished]
-                if not finished:
-                    raise SessionLimitError("Too many active games right now. Try again later.")
-                oldest = min(finished, key=lambda s: s.last_active)
-                del self._sessions[oldest.session_id]
+            self._make_room_locked()          # fail fast, before doing any work
 
         session = GameSession(
             session_id=uuid.uuid4().hex,
@@ -386,15 +407,18 @@ class SessionManager:
             session.play_bot_move(self.mover)    # may raise BotMoveError -> not registered
 
         with self._lock:
+            # Re-check: other games may have been created while the bot was
+            # thinking, and the cap must hold strictly.
+            self._make_room_locked()
             self._sessions[session.session_id] = session
         return session
 
     def get(self, session_id: str) -> GameSession:
         """Return the live session, refreshing its idle timer."""
         with self._lock:
+            self._purge_expired_locked()      # keeps memory bounded without a background thread
             session = self._sessions.get(session_id)
-            if session is None or self._is_expired(session):
-                self._sessions.pop(session_id, None)
+            if session is None:
                 raise SessionNotFoundError("Game not found or expired.")
             session.touch()
             return session

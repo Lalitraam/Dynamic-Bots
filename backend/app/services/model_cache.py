@@ -29,6 +29,7 @@ Design
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -37,6 +38,8 @@ from typing import Any, Callable, Optional
 
 from .. import config
 from . import player_paths
+
+logger = logging.getLogger(__name__)
 
 FileVersion = tuple[int, int]  # (mtime_ns, size_in_bytes) of model.pt
 
@@ -85,8 +88,11 @@ def load_bot_from_disk(username: str, version: FileVersion) -> LoadedBot:
         )
         opening_book = OpeningBook(username)
     except Exception as exc:  # noqa: BLE001 - any failure means "not loadable"
+        # Details (file paths, torch errors) go to the server log, not to API clients.
+        logger.exception("Failed to load model for '%s'", username)
         raise ModelLoadError(
-            f"Could not load model for '{username}': {exc}"
+            "The model file could not be loaded (it may be corrupt or built "
+            "with a different architecture)."
         ) from exc
 
     return LoadedBot(
@@ -181,9 +187,8 @@ class ModelCache:
                 raise
             except Exception as exc:  # noqa: BLE001
                 self._drop(key)
-                raise ModelLoadError(
-                    f"Could not load model for '{key}': {exc}"
-                ) from exc
+                logger.exception("Unexpected error while loading model for '%s'", key)
+                raise ModelLoadError("The model could not be loaded.") from exc
 
             with self._lock:
                 self._entries[key] = bot
