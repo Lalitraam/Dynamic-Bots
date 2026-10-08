@@ -111,3 +111,24 @@ MODEL_DROPOUT = 0.3
 TRAIN_SEED = 42
 INFERENCE_TEMPERATURE_DEFAULT = 1.0
 OPENING_BOOK_PLY_CUTOFF = 10   # used only by evaluate.py's "opening divergence" metric
+
+
+# ---------------------------------------------------------------------------
+# Milestone 4: Serving & Inference API
+# ---------------------------------------------------------------------------
+
+# Lichess usernames: 2-30 characters, letters / digits / underscore / hyphen.
+# Serving endpoints validate against this BEFORE touching the filesystem.
+USERNAME_PATTERN = r"^[A-Za-z0-9_-]{2,30}$"
+
+# Model cache (Phase 2): max number of loaded models kept in memory (LRU).
+MODEL_CACHE_MAX_SIZE = 8
+
+# Game sessions (Phase 3): idle expiry and hard cap on live sessions.
+SESSION_IDLE_TTL_SECONDS = 30 * 60
+SESSION_MAX_COUNT = 200
+
+# Temperature bounds accepted from API callers (Phase 4).
+# The default stays INFERENCE_TEMPERATURE_DEFAULT (Milestone 3).
+TEMPERATURE_MIN = 0.1
+TEMPERATURE_MAX = 2.0

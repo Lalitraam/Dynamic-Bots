@@ -3,7 +3,7 @@ Chess Bot Clone Factory — FastAPI application entry point.
 """
 
 from fastapi import FastAPI
-from .routers import ingest
+from .routers import ingest,play
 
 app = FastAPI(
     title="Chess Bot Clone Factory",
@@ -12,3 +12,4 @@ app = FastAPI(
 )
 
 app.include_router(ingest.router, prefix="/api")
+app.include_router(play.router, prefix="/api")
