@@ -12,7 +12,8 @@ ReadinessState = Literal[
     "ingest_failed",         # last ingest job failed (see `detail`)
     "rejected",              # ingested, but too few games to train a model
     "ingested_not_trained",  # dataset exists, no usable model.pt yet
-    "ready",                 # model.pt present: the bot can play
+    "model_unreadable",      # model.pt exists but could not be loaded
+    "ready",                 # model loads fine: the bot can play
 ]
 
 

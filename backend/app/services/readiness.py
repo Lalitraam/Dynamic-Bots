@@ -3,14 +3,16 @@ Readiness check for the serving API (Milestone 4, Phase 1).
 
 Answers one question for the frontend: "can I play against this player's bot?"
 
-The check is purely read-only: it looks at files under the player's folder
-and at the in-memory ingest job (passed in by the router). It never creates
-folders and does not load the model (loadability is verified by the model
-cache in Phase 2).
+The check never creates folders. It looks at files under the player's folder
+and at the in-memory ingest job (passed in by the router). When a model cache
+is passed in, it also confirms the model really loads (and leaves it warm in
+the cache for the game that is about to start).
 
 Decision order
 --------------
-1. model.pt exists and is non-empty                 -> "ready"
+1. model.pt exists and is non-empty
+     loads fine (or no cache given)                 -> "ready"
+     fails to load                                  -> "model_unreadable"
 2. an ingest job is active                          -> "ingesting"
 3. info.json exists                                 -> "rejected" or
                                                        "ingested_not_trained"
@@ -32,6 +34,7 @@ import json
 from typing import Any, Optional
 
 from . import player_paths
+from .model_cache import ModelCache, ModelLoadError, ModelNotFoundError
 
 _NON_ACTIVE_JOB_STATUSES = {None, "failed", "completed"}
 
@@ -57,12 +60,14 @@ def _model_file_usable(username: str) -> bool:
 def get_readiness(
     username: str,
     ingest_job: Optional[dict] = None,
+    cache: Optional[ModelCache] = None,
 ) -> dict[str, Any]:
     """
     Report whether *username*'s bot can play.
 
     Raises player_paths.InvalidUsernameError for malformed usernames.
     *ingest_job* is the in-memory job dict from routers/ingest.py (or None).
+    *cache*, if given, is used to verify that the model actually loads.
     """
     key = player_paths.normalize_username(username)
     job_status = (ingest_job or {}).get("status")
@@ -84,7 +89,19 @@ def get_readiness(
 
     # 1. A usable model beats everything.
     if _model_file_usable(key):
-        return result("ready", "Trained model found.")
+        if cache is None:
+            return result("ready", "Trained model found.")
+        try:
+            cache.get(key)
+        except ModelLoadError as exc:
+            return result(
+                "model_unreadable",
+                f"A model file exists but could not be loaded: {exc}",
+            )
+        except ModelNotFoundError:
+            pass  # file vanished between the two checks: fall through
+        else:
+            return result("ready", "Trained model is loaded and ready.")
 
     # 2. Ingestion in progress.
     if job_status not in _NON_ACTIVE_JOB_STATUSES:

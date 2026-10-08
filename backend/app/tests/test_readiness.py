@@ -117,3 +117,60 @@ def test_training_info_tier_preferred(data_root):
     (d / "training_info.json").write_text(json.dumps({"model_tier": "full"}))
     (d / "model.pt").write_bytes(b"weights")
     assert readiness.get_readiness("alice")["model_tier"] == "full"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: loadability check through the model cache
+# ---------------------------------------------------------------------------
+import time
+
+from app.services.model_cache import LoadedBot, ModelCache, ModelLoadError
+
+
+def _fake_cache(fail=False):
+    calls = []
+
+    def loader(username, version):
+        calls.append(username)
+        if fail:
+            raise ModelLoadError("checkpoint is corrupt")
+        return LoadedBot(username, object(), object(), version, time.time())
+
+    return ModelCache(max_size=3, loader=loader), calls
+
+
+def test_ready_with_cache_loads_and_warms_cache(data_root):
+    d = _player_dir(data_root)
+    (d / "model.pt").write_bytes(b"weights")
+    cache, calls = _fake_cache()
+
+    res = readiness.get_readiness("alice", cache=cache)
+
+    assert res["state"] == "ready" and res["ready"] is True
+    assert calls == ["alice"]
+    assert cache.keys() == ["alice"]       # warm for the game that follows
+
+
+def test_model_unreadable_when_load_fails(data_root):
+    d = _player_dir(data_root)
+    (d / "info.json").write_text(json.dumps({"model_tier": "full"}))
+    (d / "model.pt").write_bytes(b"weights")
+    cache, _ = _fake_cache(fail=True)
+
+    res = readiness.get_readiness("alice", cache=cache)
+
+    assert res["state"] == "model_unreadable"
+    assert res["ready"] is False
+    assert "corrupt" in res["detail"]
+    assert res["model_tier"] == "full"
+
+
+def test_cache_not_consulted_without_model_file(data_root):
+    d = _player_dir(data_root)
+    (d / "info.json").write_text(json.dumps({"model_tier": "small"}))
+    cache, calls = _fake_cache()
+
+    res = readiness.get_readiness("alice", cache=cache)
+
+    assert res["state"] == "ingested_not_trained"
+    assert calls == []
