@@ -23,6 +23,20 @@ DEFAULT_RATING = 1500
 BUCKET_MAX_AGE_6M = 180    # 6 months
 BUCKET_MAX_AGE_18M = 540   # 18 months
 MAX_AGE_DAYS = 1095        # 3 years (36 months)
+FETCH_SINCE_DAYS = MAX_AGE_DAYS
+PER_BUCKET_FETCH_MAX = 1500  # max per bucket request
+
+
+def default_since_ms(now=None) -> int:
+    from datetime import datetime, timezone
+    if now is None:
+        now = datetime.now(timezone.utc)
+    return int((now.timestamp() - FETCH_SINCE_DAYS * 86400) * 1000)
+
+# Rate limiting and resume constants
+RATE_LIMIT_WAIT_SECONDS = 60.0
+OVERLAP_MS = 120000        # 2 minutes overlap window on resume
+RESUME_SLACK = 100         # Additional games requested on resume
 
 # Included categories (time control categories) for training
 INCLUDED_CATEGORIES = {"bullet", "blitz", "rapid"}

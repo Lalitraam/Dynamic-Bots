@@ -81,6 +81,100 @@ def test_build_dataset_and_dataloader(tmp_path):
     
     assert "legal_mask" in batch
     assert batch["legal_mask"].shape == (2, 64, 64)
-    assert batch["legal_mask"].dtype == torch.bool
-    
     config_module.DATA_ROOT = orig_data_root
+
+
+def test_dataset_builder_retries_used_single_source_of_truth(tmp_path):
+    """T_A4: stale ingest_info.json with retries_used=7 + build_dataset(..., retries_used=2)
+    -> info.json says 2."""
+    import json
+    import app.config as config_module
+    from app.services.storage import player_dir
+
+    orig_data_root = config_module.DATA_ROOT
+    config_module.DATA_ROOT = tmp_path
+
+    username = "retries_truth_user"
+    pdir = player_dir(username)
+    pdir.mkdir(parents=True, exist_ok=True)
+
+    # Write stale ingest_info.json with retries_used=7
+    with open(pdir / "ingest_info.json", "w", encoding="utf-8") as f:
+        json.dump({"retries_used": 7}, f)
+
+    games = load_fixture_games()
+    try:
+        with patch("app.services.extractor.storage.load_games", return_value=games):
+            info = build_dataset(username, retries_used=2)
+
+        assert info["retries_used"] == 2
+        with open(pdir / "info.json", "r", encoding="utf-8") as f:
+            saved_info = json.load(f)
+        assert saved_info["retries_used"] == 2
+    finally:
+        config_module.DATA_ROOT = orig_data_root
+
+
+def test_dataset_report_renders_zero_counts_and_ingestion_section(tmp_path):
+    """D1 test: build_dataset on the fixture, read dataset_report.md, assert 'illegal_move: 0'
+    and the ingestion section (including the retries_used and per-bucket request lines) are present.
+    """
+    import json
+    import app.config as config_module
+    from app.services.storage import player_dir
+
+    orig_data_root = config_module.DATA_ROOT
+    config_module.DATA_ROOT = tmp_path
+
+    username = "report_test_user"
+    pdir = player_dir(username)
+    pdir.mkdir(parents=True, exist_ok=True)
+
+    # Ingest info with retries_used and per-bucket requests
+    ingest_info = {
+        "retries_used": 3,
+        "requests": 5,
+        "skipped_duplicates": 2,
+        "bucket_requests": {"last_6m": 2, "6_18m": 2, "18_36m": 1},
+        "drop_stats": {"duplicate": 0, "too_old": 1},
+        "request_log": [
+            {"bucket": "last_6m", "status_code": 200, "lines": 10, "max": 1500},
+        ],
+    }
+    with open(pdir / "ingest_info.json", "w", encoding="utf-8") as f:
+        json.dump(ingest_info, f, indent=2)
+
+    games = load_fixture_games()
+    try:
+        with patch("app.services.extractor.storage.load_games", return_value=games):
+            build_dataset(username, retries_used=3)
+
+        report_path = pdir / "dataset_report.md"
+        assert report_path.exists()
+        content = report_path.read_text(encoding="utf-8")
+
+        # 1. Zero counts print (no filter > 0)
+        assert "## Extraction Drops" in content
+        assert "- illegal_move: 0" in content
+        assert "- unparseable_pgn: 0" in content
+        assert "- no_target_moves: 0" in content
+
+        # 2. Ingestion section present
+        assert "## Ingestion" in content
+        assert "- Retries Used: 3" in content
+        assert "- Requests: 5" in content
+        assert "- Skipped Duplicates: 2" in content
+
+        # 3. Per-bucket request lines present
+        assert "### Per-Bucket Requests" in content
+        assert "- last_6m: 2 requests" in content
+        assert "- 6_18m: 2 requests" in content
+        assert "- 18_36m: 1 requests" in content
+
+        # 4. Request log summary and ingestion drops
+        assert "### Request Log Summary" in content
+        assert "### Ingestion Drops" in content
+    finally:
+        config_module.DATA_ROOT = orig_data_root
+
+

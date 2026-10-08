@@ -22,6 +22,7 @@ from ..services.downloader import stream_games
 from ..services.parser import parse_stream_into_buckets
 from ..services.sampler import sample_games
 from ..services.storage import save_games
+from ..services.ingest_stats import IngestStats
 
 router = APIRouter()
 
@@ -60,14 +61,21 @@ async def _run_ingest(username: str) -> None:
         _jobs[key]["status"] = "downloading"
         _jobs[key]["progress"] = pct
 
+    stream = None
+    drop_stats = None
+    stats = IngestStats()
     try:
         # 1. Stream and parse
-        stream = stream_games(username)
+        stream = stream_games(username, overlap_ms=config.OVERLAP_MS, stats=stats)
         buckets, total_valid, drop_stats = await parse_stream_into_buckets(
-            stream, username, on_progress=on_progress
+            stream, username, on_progress=on_progress, stats=stats
         )
 
         _jobs[key]["status"] = "parsing_and_filtering"
+
+        retries_used = getattr(stream, "retries_used", 0)
+        if stats.retries_used:
+            retries_used = stats.retries_used
 
         if total_valid < config.MIN_GAMES_REQUIRED:
             _jobs[key].update({
@@ -77,6 +85,9 @@ async def _run_ingest(username: str) -> None:
                     f"(minimum {config.MIN_GAMES_REQUIRED})"
                 ),
                 "drop_stats": drop_stats,
+                "retries_used": retries_used,
+                "skipped_duplicates": stats.skipped_duplicates,
+                "request_log": stats.request_log,
             })
             return
 
@@ -84,6 +95,22 @@ async def _run_ingest(username: str) -> None:
         _jobs[key]["status"] = "sampling"
         result = sample_games(buckets)
         games = result["games"]
+
+        # Write ingest_info.json into player_dir after sampling
+        from ..services.storage import player_dir
+        import json
+        pdir = player_dir(username)
+        pdir.mkdir(parents=True, exist_ok=True)
+        stats.retries_used = retries_used
+        stats.requests = getattr(stream, "requests", stats.requests)
+        stats.quota_used = result["quota_used"]
+        stats.bucket_counts = {
+            "bullet": result["bullet_count"],
+            "blitz": result["blitz_count"],
+            "rapid": result["rapid_count"],
+        }
+        with open(pdir / "ingest_info.json", "w", encoding="utf-8") as f:
+            json.dump(stats.to_dict(), f, indent=2)
 
         # 3. Persist
         _jobs[key]["status"] = "saving"
@@ -93,7 +120,7 @@ async def _run_ingest(username: str) -> None:
         _jobs[key]["status"] = "building_dataset"
         from ..services.dataset_builder import build_dataset
         import asyncio
-        info = await asyncio.to_thread(build_dataset, username)
+        info = await asyncio.to_thread(build_dataset, username, retries_used=retries_used)
 
         # 5. Update status
         tier = config.model_tier(len(games))
@@ -108,13 +135,24 @@ async def _run_ingest(username: str) -> None:
             "blitz_count": result["blitz_count"],
             "rapid_count": result["rapid_count"],
             "drop_stats": drop_stats,
+            "retries_used": retries_used,
+            "skipped_duplicates": stats.skipped_duplicates,
+            "request_log": stats.request_log,
             "dataset_info": info,
         })
 
     except Exception as exc:  # noqa: BLE001
+        retries_used = getattr(stream, "retries_used", 0) if stream is not None else 0
+        if stats and stats.retries_used:
+            retries_used = stats.retries_used
+        collected_drops = stats.drop_stats if (stats and stats.drop_stats) else drop_stats
         _jobs[key].update({
             "status": "failed",
             "error": str(exc),
+            "retries_used": retries_used,
+            "skipped_duplicates": stats.skipped_duplicates if stats else 0,
+            "request_log": stats.request_log if stats else [],
+            "drop_stats": collected_drops,
         })
 
 
@@ -152,22 +190,52 @@ async def get_status(username: str):
     job = _jobs.get(key)
     if job is not None:
         return job
-        
-    # Fallback to info.json on disk
+
+    # Fallback to ingest_info.json and info.json on disk
     from ..services.storage import player_dir
     import json
-    info_path = player_dir(key) / "info.json"
-    if info_path.exists():
-        try:
-            with open(info_path, "r", encoding="utf-8") as f:
-                info = json.load(f)
-            return {
-                "username": key,
-                "status": "completed",
-                "progress": 100.0,
-                "dataset_info": info
-            }
-        except json.JSONDecodeError:
-            pass
+    pdir = player_dir(key)
+    ingest_info_path = pdir / "ingest_info.json"
+    info_path = pdir / "info.json"
+
+    if ingest_info_path.exists() or info_path.exists():
+        resp = {
+            "username": key,
+            "status": "completed",
+            "progress": 100.0,
+            "retries_used": 0,
+            "requests": 0,
+            "skipped_duplicates": 0,
+            "request_log": [],
+            "raw_lines": 0,
+            "drop_stats": {},
+            "dataset_info": {},
+        }
+        if ingest_info_path.exists():
+            try:
+                with open(ingest_info_path, "r", encoding="utf-8") as f:
+                    ingest_data = json.load(f)
+                resp.update({
+                    "retries_used": ingest_data.get("retries_used", 0),
+                    "requests": ingest_data.get("requests", 0),
+                    "skipped_duplicates": ingest_data.get("skipped_duplicates", 0),
+                    "request_log": ingest_data.get("request_log", []),
+                    "raw_lines": ingest_data.get("raw_lines", 0),
+                    "drop_stats": ingest_data.get("drop_stats", {}),
+                })
+            except json.JSONDecodeError:
+                pass
+
+        if info_path.exists():
+            try:
+                with open(info_path, "r", encoding="utf-8") as f:
+                    info = json.load(f)
+                resp["dataset_info"] = info
+                if not ingest_info_path.exists():
+                    resp["retries_used"] = info.get("retries_used", 0)
+            except json.JSONDecodeError:
+                pass
+
+        return resp
 
     raise HTTPException(status_code=404, detail=f"No job found for '{key}'.")

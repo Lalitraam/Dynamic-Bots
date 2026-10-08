@@ -27,6 +27,7 @@ Thumbs.db
 
 # Text files and scratch files (requested)
 *.txt
+!backend/requirements.txt
 scratch/
 
 # Project summary notes and task scratch
@@ -40,6 +41,7 @@ backend/data/
 *.pt
 *.pth
 *.jsonl
+!backend/app/tests/fixtures/*.jsonl
 
 # Logs and environment variables
 *.log

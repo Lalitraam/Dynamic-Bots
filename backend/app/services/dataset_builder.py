@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Map splits to an order for stable sorting
 _SPLIT_ORDER = {"train": 0, "val": 1, "test": 2}
 
-def build_dataset(username: str) -> dict:
+def build_dataset(username: str, retries_used: int = 0) -> dict:
     """
     Builds the dataset for a player: extracts, splits, and writes samples.parquet.
     Also produces opening_book.json, dataset_report.md, info.json (delegated later).
@@ -27,7 +27,9 @@ def build_dataset(username: str) -> dict:
     ----------
     username : str
         The player's username.
-        
+    retries_used : int
+        Number of download retries used for this player's download stream.
+
     Returns
     -------
     dict
@@ -45,13 +47,19 @@ def build_dataset(username: str) -> dict:
         
     if not samples:
         # No samples to save
-        return {
+        info = {
             "total_samples": 0,
             "drop_stats": drop_stats,
             "model_tier": "rejected",
             "schema_version": config.SCHEMA_VERSION,
-            "build_date": datetime.now(timezone.utc).isoformat()
+            "build_date": datetime.now(timezone.utc).isoformat(),
+            "retries_used": retries_used,
         }
+        out_dir = storage.player_dir(username)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with open(out_dir / "info.json", "w", encoding="utf-8") as f:
+            json.dump(info, f, indent=2)
+        return info
 
     # 3. Create DataFrame
     df = pd.DataFrame(samples)
@@ -90,6 +98,7 @@ def build_dataset(username: str) -> dict:
         pa.field('sample_weight', pa.float32()),
         pa.field('split', pa.string()),
         pa.field('schema_version', pa.string()),
+        pa.field('target_berserk', pa.bool_()),
     ])
 
     table = pa.Table.from_pandas(df, schema=schema, preserve_index=False)
@@ -105,6 +114,7 @@ def build_dataset(username: str) -> dict:
     model_tier = config.model_tier(n_games)
     
     split_counts = df["split"].value_counts().to_dict()
+    berserk_fraction = float(df["target_berserk"].mean()) if (len(df) > 0 and "target_berserk" in df) else 0.0
     
     info = {
         "total_samples": len(df),
@@ -113,6 +123,8 @@ def build_dataset(username: str) -> dict:
         "schema_version": config.SCHEMA_VERSION,
         "build_date": datetime.now(timezone.utc).isoformat(),
         "drop_stats": drop_stats,
+        "retries_used": retries_used,
+        "berserk_positions_fraction": berserk_fraction,
     }
     
     # Write info.json

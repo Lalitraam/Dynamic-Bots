@@ -1,6 +1,7 @@
 """
 Report service: generates a markdown report describing the dataset.
 """
+import json
 import pandas as pd
 from collections import Counter
 from typing import Any
@@ -105,14 +106,65 @@ def generate_report(username: str, samples: list[dict[str, Any]], info: dict) ->
     for uci, count in replies_b.most_common(10):
         lines.append(f"- {uci}: {count}")
         
+    # Ingestion Stats
+    pdir = storage.player_dir(username)
+    ingest_info_path = pdir / "ingest_info.json"
+    ingest_info = {}
+    if ingest_info_path.exists():
+        try:
+            with open(ingest_info_path, "r", encoding="utf-8") as f:
+                ingest_info = json.load(f)
+        except Exception:
+            pass
+
+    retries_used = info.get("retries_used", ingest_info.get("retries_used", 0))
+    requests = ingest_info.get("requests", 0)
+    skipped_duplicates = ingest_info.get("skipped_duplicates", 0)
+    bucket_requests = ingest_info.get("bucket_requests", {})
+    request_log = ingest_info.get("request_log", [])
+    ingest_drop_stats = ingest_info.get("drop_stats", {})
+
+    lines.extend([
+        "",
+        "## Ingestion",
+        f"- Retries Used: {retries_used}",
+        f"- Requests: {requests}",
+        f"- Skipped Duplicates: {skipped_duplicates}",
+        "",
+        "### Per-Bucket Requests",
+    ])
+    for b in ["last_6m", "6_18m", "18_36m"]:
+        count = bucket_requests.get(b, 0)
+        lines.append(f"- {b}: {count} requests")
+
+    lines.extend([
+        "",
+        "### Request Log Summary",
+        f"- Total Requests in Log: {len(request_log)}",
+    ])
+    for entry in request_log:
+        lines.append(f"- [{entry.get('bucket', 'all')}] status {entry.get('status_code')}, {entry.get('lines', 0)} lines, max={entry.get('max')}")
+
+    lines.extend([
+        "",
+        "### Ingestion Drops",
+    ])
+    if ingest_drop_stats:
+        for reason, count in ingest_drop_stats.items():
+            lines.append(f"- {reason}: {count}")
+    else:
+        lines.append("- (no drops recorded)")
+
     lines.extend([
         "",
         "## Extraction Drops"
     ])
-    for reason, count in info.get("drop_stats", {}).items():
-        if count > 0:
-            lines.append(f"- {reason}: {count}")
-            
+    extraction_drops = dict(info.get("drop_stats", {}))
+    for key in ["unparseable_pgn", "illegal_move", "no_target_moves"]:
+        extraction_drops.setdefault(key, 0)
+    for reason, count in sorted(extraction_drops.items()):
+        lines.append(f"- {reason}: {count}")
+
     out_path = storage.player_dir(username) / "dataset_report.md"
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

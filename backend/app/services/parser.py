@@ -27,6 +27,7 @@ import chess.pgn
 
 from .. import config
 from .classifier import classify_time_control, parse_time_control, meets_min_time_control
+from .ingest_stats import IngestStats
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -44,6 +45,8 @@ async def parse_stream_into_buckets(
     stream: AsyncIterable[str],
     username: str,
     on_progress: Callable[[int], None] | None = None,
+    now: datetime | None = None,
+    stats: IngestStats | None = None,
 ) -> tuple[dict[str, list[dict]], int, dict[str, int]]:
     """
     Consume *stream* (async iterable of NDJSON lines) and return
@@ -53,7 +56,8 @@ async def parse_stream_into_buckets(
     drop reason.
     """
     target = username.lower()
-    now = datetime.now(timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
     seen_ids: set[str] = set()
     line_count = 0
 
@@ -81,6 +85,10 @@ async def parse_stream_into_buckets(
 
     async for raw_line in stream:
         line_count += 1
+        if stats is not None:
+            if stats.raw_lines == 0:
+                stats.raw_lines = line_count
+            stats.drop_stats = drop_stats
         if on_progress:
             on_progress(line_count)
 
@@ -94,6 +102,14 @@ async def parse_stream_into_buckets(
         except json.JSONDecodeError:
             drop_stats["no_pgn"] += 1
             continue
+
+        # --- Duplicate filter from JSON "id" immediately after parsing ---
+        game_id = obj.get("id", "")
+        if game_id:
+            if game_id in seen_ids:
+                drop_stats["duplicate"] += 1
+                continue
+            seen_ids.add(game_id)
 
         # --- Require a non-empty PGN field ---
         pgn = obj.get("pgn", "")
@@ -113,16 +129,15 @@ async def parse_stream_into_buckets(
 
         headers = game.headers
 
-        # --- game_id from JSON "id" or Site URL last path segment ---
-        game_id = obj.get("id", "")
+        # --- Fallback to Site header only when "id" was missing from JSON ---
         if not game_id:
             site = headers.get("Site", "")
             game_id = site.rstrip("/").split("/")[-1] if site else ""
-
-        # --- Duplicate filter ---
-        if game_id and game_id in seen_ids:
-            drop_stats["duplicate"] += 1
-            continue
+            if game_id:
+                if game_id in seen_ids:
+                    drop_stats["duplicate"] += 1
+                    continue
+                seen_ids.add(game_id)
 
         # --- Variant filter ---
         variant = headers.get("Variant", "")
@@ -250,10 +265,7 @@ async def parse_stream_into_buckets(
             "pgn": pgn,
         }
 
-        # --- Mark game_id seen & Bucket by age ---
-        if game_id:
-            seen_ids.add(game_id)
-
+        # --- Bucket by age ---
         if age_days <= config.BUCKET_MAX_AGE_6M:
             buckets["last_6m"].append(game_record)
         elif age_days <= config.BUCKET_MAX_AGE_18M:
@@ -262,4 +274,10 @@ async def parse_stream_into_buckets(
             buckets["18_36m"].append(game_record)
 
     total_valid = sum(len(v) for v in buckets.values())
+    if stats is not None:
+        if stats.raw_lines == 0:
+            stats.raw_lines = line_count
+        stats.drop_stats = drop_stats
+        stats.quota_used = {"total": total_valid}
+        stats.bucket_counts = {k: len(v) for k, v in buckets.items()}
     return buckets, total_valid, drop_stats

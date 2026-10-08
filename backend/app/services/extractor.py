@@ -66,8 +66,18 @@ def extract_samples(username: str) -> tuple[list[dict[str, Any]], dict[str, int]
 
         board = game.board()
         
+        # Check Berserk headers
+        headers = game.headers
+        white_berserk = (headers.get("WhiteBerserk", "").strip().lower() == "true")
+        black_berserk = (headers.get("BlackBerserk", "").strip().lower() == "true")
+        target_berserk = white_berserk if is_player_white else black_berserk
+
+        # If a player berserked, their initial clock is base_seconds / 2 (opponent berserk does not change target clock)
+        white_initial = (base_seconds / 2.0) if white_berserk else base_seconds
+        black_initial = (base_seconds / 2.0) if black_berserk else base_seconds
+
         # Track the player's clock from their PREVIOUS move.
-        # For their very first move, the clock is the base time (if the game has clocks at all).
+        # For their very first move, the clock is the initial time (if the game has clocks at all).
         # We need to know if the game has ANY clock annotations.
         has_clocks = False
         node_ptr = game
@@ -80,8 +90,8 @@ def extract_samples(username: str) -> tuple[list[dict[str, Any]], dict[str, int]
         # We store the clock *after* each move.
         # last_clock[White] is the clock after White's last move.
         last_clock = {
-            chess.WHITE: base_seconds if has_clocks else None,
-            chess.BLACK: base_seconds if has_clocks else None,
+            chess.WHITE: white_initial if has_clocks else None,
+            chess.BLACK: black_initial if has_clocks else None,
         }
 
         ply = 0
@@ -117,6 +127,7 @@ def extract_samples(username: str) -> tuple[list[dict[str, Any]], dict[str, int]
                         "clock_before_move": clock_before_move,
                         "halfmove_clock": board.halfmove_clock,
                         "sample_weight": 1.0,
+                        "target_berserk": target_berserk,
                     }
                     samples.append(row)
 

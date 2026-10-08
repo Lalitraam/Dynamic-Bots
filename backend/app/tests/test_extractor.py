@@ -159,3 +159,178 @@ def test_mid_game_missing_clock_carries_forward():
             f"Clocked game: all moves must have non-None clock_before_move, ply={s['ply']}"
         )
 
+
+def test_extractor_standard_300_plus_0_clock_sequence():
+    """Phase C: 300+0 game, white %clk after each white move = 0:04:55, 0:04:50, 0:04:45
+    -> white's 3 values are 300, 295, 290.
+    Assert the 2nd value is NOT 290 (the clock after the predicted move must never be used).
+    """
+    pgn = (
+        '[Event "Test"]\n'
+        '[White "TargetPlayer"]\n'
+        '[Black "Opponent"]\n'
+        '[Result "*"]\n'
+        '[TimeControl "300+0"]\n\n'
+        '1. e4 { [%clk 0:04:55] } 1... e5 { [%clk 0:04:58] } '
+        '2. Nf3 { [%clk 0:04:50] } 2... Nc6 { [%clk 0:04:56] } '
+        '3. Bb5 { [%clk 0:04:45] } 3... a6 { [%clk 0:04:54] } *'
+    )
+    game_record = {
+        "game_id": "g_std_300",
+        "date": "2024-06-01T00:00:00+00:00",
+        "category": "blitz",
+        "is_fast": False,
+        "player_color": "white",
+        "rating": 1500,
+        "opponent_rating": 1500,
+        "time_control": "300+0",
+        "termination": "Normal",
+        "pgn": pgn,
+    }
+    with patch("app.services.extractor.storage.load_games", return_value=[game_record]):
+        samples, _ = extract_samples("targetplayer")
+
+    s = sorted(samples, key=lambda x: x["ply"])
+    assert len(s) == 3
+    assert s[0]["clock_before_move"] == 300.0
+    assert s[1]["clock_before_move"] == 295.0
+    assert s[2]["clock_before_move"] == 290.0
+    # The 2nd value must NOT be 290 (clock after predicted move)
+    assert s[1]["clock_before_move"] != 290.0
+    assert s[0]["target_berserk"] is False
+
+
+def test_extractor_white_berserk_clock_sequence():
+    """Phase C: same PGN with [WhiteBerserk "true"] and white clocks 0:02:25, 0:02:20, 0:02:15
+    -> first value 150, then 145, 140.
+    """
+    pgn = (
+        '[Event "Test"]\n'
+        '[White "TargetPlayer"]\n'
+        '[Black "Opponent"]\n'
+        '[Result "*"]\n'
+        '[TimeControl "300+0"]\n'
+        '[WhiteBerserk "true"]\n\n'
+        '1. e4 { [%clk 0:02:25] } 1... e5 { [%clk 0:04:58] } '
+        '2. Nf3 { [%clk 0:02:20] } 2... Nc6 { [%clk 0:04:56] } '
+        '3. Bb5 { [%clk 0:02:15] } 3... a6 { [%clk 0:04:54] } *'
+    )
+    game_record = {
+        "game_id": "g_wb_300",
+        "date": "2024-06-01T00:00:00+00:00",
+        "category": "blitz",
+        "is_fast": False,
+        "player_color": "white",
+        "rating": 1500,
+        "opponent_rating": 1500,
+        "time_control": "300+0",
+        "termination": "Normal",
+        "pgn": pgn,
+    }
+    with patch("app.services.extractor.storage.load_games", return_value=[game_record]):
+        samples, _ = extract_samples("targetplayer")
+
+    s = sorted(samples, key=lambda x: x["ply"])
+    assert len(s) == 3
+    assert s[0]["clock_before_move"] == 150.0
+    assert s[1]["clock_before_move"] == 145.0
+    assert s[2]["clock_before_move"] == 140.0
+    assert s[0]["target_berserk"] is True
+
+
+def test_extractor_black_berserk_only_target_white():
+    """Phase C: Black-berserk-only game, target = White -> target's first value stays 300."""
+    pgn = (
+        '[Event "Test"]\n'
+        '[White "TargetPlayer"]\n'
+        '[Black "Opponent"]\n'
+        '[Result "*"]\n'
+        '[TimeControl "300+0"]\n'
+        '[BlackBerserk "true"]\n\n'
+        '1. e4 { [%clk 0:04:55] } 1... e5 { [%clk 0:02:25] } *'
+    )
+    game_record = {
+        "game_id": "g_bb_target_white",
+        "date": "2024-06-01T00:00:00+00:00",
+        "category": "blitz",
+        "is_fast": False,
+        "player_color": "white",
+        "rating": 1500,
+        "opponent_rating": 1500,
+        "time_control": "300+0",
+        "termination": "Normal",
+        "pgn": pgn,
+    }
+    with patch("app.services.extractor.storage.load_games", return_value=[game_record]):
+        samples, _ = extract_samples("targetplayer")
+
+    s = sorted(samples, key=lambda x: x["ply"])
+    assert len(s) == 1
+    assert s[0]["clock_before_move"] == 300.0
+    assert s[0]["target_berserk"] is False
+
+
+def test_extractor_target_black_with_black_berserk():
+    """Phase C: target = Black with BlackBerserk -> first value 150."""
+    pgn = (
+        '[Event "Test"]\n'
+        '[White "Opponent"]\n'
+        '[Black "TargetPlayer"]\n'
+        '[Result "*"]\n'
+        '[TimeControl "300+0"]\n'
+        '[BlackBerserk "true"]\n\n'
+        '1. e4 { [%clk 0:04:58] } 1... e5 { [%clk 0:02:25] } *'
+    )
+    game_record = {
+        "game_id": "g_bb_target_black",
+        "date": "2024-06-01T00:00:00+00:00",
+        "category": "blitz",
+        "is_fast": False,
+        "player_color": "black",
+        "rating": 1500,
+        "opponent_rating": 1500,
+        "time_control": "300+0",
+        "termination": "Normal",
+        "pgn": pgn,
+    }
+    with patch("app.services.extractor.storage.load_games", return_value=[game_record]):
+        samples, _ = extract_samples("targetplayer")
+
+    s = sorted(samples, key=lambda x: x["ply"])
+    assert len(s) == 1
+    assert s[0]["clock_before_move"] == 150.0
+    assert s[0]["target_berserk"] is True
+
+
+def test_extractor_no_clock_game_gives_none():
+    """Phase C: no-%clk game -> all None, clock_available False."""
+    pgn = (
+        '[Event "Test"]\n'
+        '[White "TargetPlayer"]\n'
+        '[Black "Opponent"]\n'
+        '[Result "*"]\n'
+        '[TimeControl "300+0"]\n\n'
+        '1. e4 1... e5 2. Nf3 2... Nc6 *'
+    )
+    game_record = {
+        "game_id": "g_noclock",
+        "date": "2024-06-01T00:00:00+00:00",
+        "category": "blitz",
+        "is_fast": False,
+        "player_color": "white",
+        "rating": 1500,
+        "opponent_rating": 1500,
+        "time_control": "300+0",
+        "termination": "Normal",
+        "pgn": pgn,
+    }
+    with patch("app.services.extractor.storage.load_games", return_value=[game_record]):
+        samples, _ = extract_samples("targetplayer")
+
+    s = sorted(samples, key=lambda x: x["ply"])
+    assert len(s) == 2
+    for row in s:
+        assert row["clock_before_move"] is None
+        assert row["target_berserk"] is False
+
+
