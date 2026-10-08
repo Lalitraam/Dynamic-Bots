@@ -110,6 +110,11 @@ def predict_with_model(
 # GameSession
 # ---------------------------------------------------------------------------
 
+def _clamp_temperature(value: float) -> float:
+    """Keep any temperature inside the configured bounds (never trust the caller)."""
+    return max(config.TEMPERATURE_MIN, min(config.TEMPERATURE_MAX, float(value)))
+
+
 def _color_name(color: bool) -> str:
     return "white" if color == chess.WHITE else "black"
 
@@ -143,7 +148,7 @@ class GameSession:
         self.bot = bot
         self.human_color = human_color
         self.bot_color = not human_color
-        self.temperature = temperature
+        self.temperature = _clamp_temperature(temperature)
         self.human_rating = human_rating
         self.bot_rating = bot_rating
         self.board = board if board is not None else chess.Board()
@@ -209,15 +214,13 @@ class GameSession:
                 )
         raise IllegalMoveError(f"Illegal move '{text}' in this position.")
 
-    def _bot_reply(self, mover: Mover) -> _MoveRecord:
+    def _bot_reply(self, mover: Mover, temperature: float) -> _MoveRecord:
         meta = {
             "player_rating": self.bot_rating,       # the bot is "the player"
             "opponent_rating": self.human_rating,
         }
         try:
-            move = mover(
-                self.bot, self.board.copy(stack=False), meta, self.temperature
-            )
+            move = mover(self.bot, self.board.copy(stack=False), meta, temperature)
         except Exception as exc:  # noqa: BLE001
             raise BotMoveError(f"The bot failed to choose a move: {exc}") from exc
         # Safety net: never trust the bot (or a corrupt opening book) blindly.
@@ -234,16 +237,23 @@ class GameSession:
                 raise GameOverError("The game is already finished.")
             if self.board.turn != self.bot_color:
                 raise NotYourTurnError("It is not the bot's turn.")
-            self._bot_reply(mover)
+            self._bot_reply(mover, self.temperature)
             return self.snapshot()
 
-    def play_turn(self, uci: Any, mover: Mover) -> dict[str, Any]:
+    def play_turn(
+        self, uci: Any, mover: Mover, temperature: Optional[float] = None
+    ) -> dict[str, Any]:
         """
         Atomic turn: validate + apply the human's move, then (if the game is
         not over) generate + apply the bot's reply.
 
+        *temperature*, if given, is clamped to the allowed range and becomes the
+        game's temperature once the turn succeeds ("more random" vs "more
+        true to the player's habits" can be changed between moves).
+
         Raises GameOverError, NotYourTurnError, InvalidMoveFormatError,
-        IllegalMoveError, BotMoveError. On any error the board is unchanged.
+        IllegalMoveError, BotMoveError. On any error the board (and the
+        temperature) are unchanged.
         """
         with self.lock:
             self.touch()
@@ -252,15 +262,19 @@ class GameSession:
             if self.board.turn != self.human_color:
                 raise NotYourTurnError("It is not your turn.")
 
+            turn_temperature = (
+                self.temperature if temperature is None else _clamp_temperature(temperature)
+            )
             move = self._parse_human_move(uci)
             self._push(move, by="human")
 
             if not self.finished:
                 try:
-                    self._bot_reply(mover)
+                    self._bot_reply(mover, turn_temperature)
                 except BotMoveError:
                     self._pop_last()          # roll back so the client can retry
                     raise
+            self.temperature = turn_temperature
             return self.snapshot()
 
     def snapshot(self) -> dict[str, Any]:
@@ -385,9 +399,11 @@ class SessionManager:
             session.touch()
             return session
 
-    def play_turn(self, session_id: str, uci: Any) -> dict[str, Any]:
+    def play_turn(
+        self, session_id: str, uci: Any, temperature: Optional[float] = None
+    ) -> dict[str, Any]:
         """Convenience: look up the session and play a full turn."""
-        return self.get(session_id).play_turn(uci, self.mover)
+        return self.get(session_id).play_turn(uci, self.mover, temperature)
 
     def __len__(self) -> int:
         with self._lock:

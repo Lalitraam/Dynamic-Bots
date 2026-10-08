@@ -233,3 +233,102 @@ def test_get_session_roundtrip(trained_player, fake_manager):
 def test_get_unknown_session_404(fake_manager):
     resp = client.get("/api/play/sessions/doesnotexist")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: move endpoint
+# ---------------------------------------------------------------------------
+
+class _ScriptedMover:
+    def __init__(self, ucis):
+        self.ucis = list(ucis)
+
+    def __call__(self, bot, board, meta, temperature):
+        return chess.Move.from_uci(self.ucis.pop(0))
+
+
+def _new_game(username, **body):
+    resp = client.post("/api/play/sessions", json={"username": username, **body})
+    assert resp.status_code == 201
+    return resp.json()
+
+
+def _move(session_id, move, **extra):
+    return client.post(f"/api/play/sessions/{session_id}/moves", json={"move": move, **extra})
+
+
+def test_move_roundtrip(trained_player, fake_manager):
+    game = _new_game(trained_player)
+    resp = _move(game["session_id"], "e2e4")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert [m["by"] for m in data["moves"]] == ["human", "bot"]
+    assert data["moves"][0]["san"] == "e4"
+    assert data["last_bot_move"] == data["moves"][1]
+    assert data["human_to_move"] is True
+    # State persists between requests.
+    assert client.get(f"/api/play/sessions/{game['session_id']}").json() == data
+
+
+@pytest.mark.parametrize("bad", ["e2", "zzzz", "e2e4e5", "0000", "e2e5", "e7e5", "e1e2"])
+def test_bad_moves_400_and_board_unchanged(trained_player, fake_manager, bad):
+    game = _new_game(trained_player)
+    resp = _move(game["session_id"], bad)
+    assert resp.status_code == 400
+    after = client.get(f"/api/play/sessions/{game['session_id']}").json()
+    assert after == game
+
+
+def test_move_unknown_session_404(fake_manager):
+    assert _move("nope", "e2e4").status_code == 404
+
+
+@pytest.mark.parametrize("body", [{}, {"move": ""}, {"move": "x" * 40}, {"move": "e2e4", "temperature": 9}])
+def test_move_body_validation_422(trained_player, fake_manager, body):
+    game = _new_game(trained_player)
+    resp = client.post(f"/api/play/sessions/{game['session_id']}/moves", json=body)
+    assert resp.status_code == 422
+
+
+def test_move_temperature_override(trained_player, fake_manager):
+    game = _new_game(trained_player)
+    resp = _move(game["session_id"], "e2e4", temperature=0.3)
+    assert resp.status_code == 200 and resp.json()["temperature"] == 0.3
+
+
+def test_move_after_game_over_409(trained_player, monkeypatch):
+    manager = SessionManager(mover=_ScriptedMover(["e7e5", "d8h4"]))
+    monkeypatch.setattr(game_sessions, "default_manager", manager)
+    game = _new_game(trained_player)
+    sid = game["session_id"]
+
+    assert _move(sid, "f2f3").status_code == 200
+    final = _move(sid, "g2g4")                      # bot answers Qh4#
+    assert final.status_code == 200
+    data = final.json()
+    assert data["status"] == "finished" and data["winner"] == "black"
+    assert data["termination"] == "checkmate" and data["result"] == "0-1"
+    assert data["legal_moves"] == []
+
+    assert _move(sid, "a2a3").status_code == 409
+
+
+def test_bot_failure_500_leaves_board_unchanged_and_retry_works(trained_player, monkeypatch):
+    calls = {"n": 0}
+
+    def flaky_mover(bot, board, meta, temperature):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("model exploded")
+        return next(iter(board.legal_moves))
+
+    monkeypatch.setattr(game_sessions, "default_manager", SessionManager(mover=flaky_mover))
+    game = _new_game(trained_player)
+
+    first = _move(game["session_id"], "e2e4")
+    assert first.status_code == 500
+    assert client.get(f"/api/play/sessions/{game['session_id']}").json() == game
+
+    retry = _move(game["session_id"], "e2e4")        # exactly the same request
+    assert retry.status_code == 200
+    assert len(retry.json()["moves"]) == 2

@@ -336,3 +336,38 @@ def test_simultaneous_identical_moves_apply_exactly_once():
 
     assert results == ["illegal", "ok"]
     assert len(session.moves) == 2            # one human move + one bot reply
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: per-turn temperature
+# ---------------------------------------------------------------------------
+
+def test_turn_temperature_override_is_used_and_sticks():
+    mover = FirstLegalMover()
+    manager = new_manager(mover)
+    session = create(manager, temperature=1.0)
+    snap = session.play_turn("e2e4", manager.mover, temperature=0.3)
+    assert mover.calls[-1]["temperature"] == 0.3
+    assert snap["temperature"] == 0.3
+    session.play_turn("d2d4", manager.mover)              # no override: keeps 0.3
+    assert mover.calls[-1]["temperature"] == 0.3
+
+
+def test_temperature_is_clamped_to_config_bounds():
+    mover = FirstLegalMover()
+    manager = new_manager(mover)
+    session = create(manager, temperature=50.0)           # clamped at creation
+    assert session.temperature == config.TEMPERATURE_MAX
+    session.play_turn("e2e4", manager.mover, temperature=-5)
+    assert mover.calls[-1]["temperature"] == config.TEMPERATURE_MIN
+
+
+def test_failed_turn_keeps_old_temperature():
+    manager = new_manager(failing_mover)
+    session = create(manager, temperature=1.0)
+    with pytest.raises(BotMoveError):
+        session.play_turn("e2e4", manager.mover, temperature=0.2)
+    assert session.temperature == 1.0
+    with pytest.raises(IllegalMoveError):
+        session.play_turn("e2e5", manager.mover, temperature=0.2)
+    assert session.temperature == 1.0

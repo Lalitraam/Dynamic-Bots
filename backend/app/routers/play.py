@@ -8,17 +8,23 @@ Phase 1-2:
 Phase 3:
   POST /api/play/sessions              -> start a human-vs-bot game
   GET  /api/play/sessions/{session_id} -> current game state
+Phase 4:
+  POST /api/play/sessions/{session_id}/moves
+                                       -> submit the human's move; the server
+                                          validates it, applies it, and replies
+                                          with the bot's move in one response
 
 Later phases add session creation and the move endpoint to this router.
 
 Status codes
 ------------
-200  state returned
+200  state returned / move played
 201  game created
-400  malformed username
+400  malformed username, or a malformed / illegal move (board unchanged)
 404  no trained model for that player / unknown or expired game
+409  game already finished
 422  invalid request body (e.g. temperature out of range)
-500  the model or the bot failed
+500  the model or the bot failed (board unchanged, the same move can be retried)
 503  too many live games
 """
 import random
@@ -26,10 +32,18 @@ import random
 import chess
 from fastapi import APIRouter, HTTPException
 
-from ..schemas.play import CreateSessionRequest, ReadinessResponse, SessionResponse
+from ..schemas.play import (
+    CreateSessionRequest,
+    MoveRequest,
+    ReadinessResponse,
+    SessionResponse,
+)
 from ..services import game_sessions, model_cache, readiness
 from ..services.game_sessions import (
     BotMoveError,
+    GameOverError,
+    InvalidMoveError,
+    NotYourTurnError,
     SessionLimitError,
     SessionNotFoundError,
 )
@@ -113,3 +127,25 @@ def get_session(session_id: str):
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return session.snapshot()
+
+
+@router.post("/play/sessions/{session_id}/moves", response_model=SessionResponse)
+def make_move(session_id: str, req: MoveRequest):
+    """
+    Play one full turn: validate and apply the human's move, then the bot's reply.
+
+    Plain `def` on purpose: the bot's model inference runs in a worker thread,
+    so it never blocks the event loop. The whole turn is atomic per game.
+    """
+    try:
+        return game_sessions.default_manager.play_turn(
+            session_id, req.move, temperature=req.temperature
+        )
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except InvalidMoveError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except (GameOverError, NotYourTurnError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except BotMoveError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

@@ -72,3 +72,11 @@ class SessionResponse(BaseModel):
     legal_moves: list[str]                  # UCI; only filled when it is the human's turn
     moves: list[MoveRecordResponse]
     last_bot_move: Optional[MoveRecordResponse] = None
+
+
+class MoveRequest(BaseModel):
+    move: str = Field(min_length=1, max_length=12)     # UCI, e.g. "e2e4" or "e7e8q"
+    # Optional: change the bot's temperature from this turn on.
+    temperature: Optional[float] = Field(
+        default=None, ge=config.TEMPERATURE_MIN, le=config.TEMPERATURE_MAX
+    )
