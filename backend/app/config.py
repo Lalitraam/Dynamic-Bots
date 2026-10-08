@@ -132,3 +132,9 @@ SESSION_MAX_COUNT = 200
 # The default stays INFERENCE_TEMPERATURE_DEFAULT (Milestone 3).
 TEMPERATURE_MIN = 0.1
 TEMPERATURE_MAX = 2.0
+
+
+
+# Rating metadata bounds accepted for the human / bot in a session (Phase 3).
+RATING_MIN = 100
+RATING_MAX = 3500
