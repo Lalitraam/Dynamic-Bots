@@ -53,6 +53,7 @@ class GameStream:
         overlap_ms: int = 0,
         stats: Any = None,
         bucket: str = "all",
+        windowed: bool = True,
     ):
         self.username = username
         self.max_games = max_games
@@ -64,6 +65,7 @@ class GameStream:
         self.overlap_ms = overlap_ms
         self.stats = stats
         self.bucket = bucket
+        self.windowed = windowed
         self.retries_used = 0
         self.requests = 0
         self._generator = None
@@ -92,12 +94,9 @@ class GameStream:
 
         now_sec = now_dt.timestamp()
 
-        if self.since_ms is not None or self.until_ms is not None:
+        if not self.windowed or self.since_ms is not None or self.until_ms is not None:
             since = self.since_ms if self.since_ms is not None else config.default_since_ms(now_dt)
             bucket_defs = [(self.bucket, since, self.until_ms, self.max_games)]
-        elif self.max_games < config.PER_BUCKET_FETCH_MAX and self.now is None and self.clock_fn is None:
-            since = config.default_since_ms(now_dt)
-            bucket_defs = [("all", since, None, self.max_games)]
         else:
             # Phase B: 3 age buckets sequentially
             # last_6m : [now-180d, now]
@@ -221,13 +220,16 @@ class GameStream:
                                 break
                     finally:
                         if self.stats is not None:
+                            req_max = req_params.get("max")
+                            cap_hit = bool(req_max is not None and lines_in_request >= req_max)
                             self.stats.request_log.append({
                                 "bucket": b_name,
                                 "status_code": status_code,
                                 "lines": lines_in_request,
                                 "since": req_params.get("since"),
                                 "until": req_params.get("until"),
-                                "max": req_params.get("max"),
+                                "max": req_max,
+                                "cap_hit": cap_hit,
                             })
                             self.stats.bucket_requests[b_name] = self.stats.bucket_requests.get(b_name, 0) + 1
                 except (httpx.HTTPStatusError, httpx.TransportError) as exc:
@@ -279,6 +281,7 @@ def stream_games(
     overlap_ms: int = 0,
     stats: Any = None,
     bucket: str = "all",
+    windowed: bool = True,
 ) -> GameStream:
     """
     Stream raw NDJSON lines for *username* from the Lichess export API.
@@ -305,6 +308,8 @@ def stream_games(
         Optional IngestStats object to record requests and retries.
     bucket : str
         Bucket identifier for request log ('all' or specific bucket name).
+    windowed : bool
+        Whether to fetch games in 3 sequential age windows (default True).
 
     Returns
     -------
@@ -322,4 +327,5 @@ def stream_games(
         overlap_ms=overlap_ms,
         stats=stats,
         bucket=bucket,
+        windowed=windowed,
     )

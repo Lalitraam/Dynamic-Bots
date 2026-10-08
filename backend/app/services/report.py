@@ -143,7 +143,7 @@ def generate_report(username: str, samples: list[dict[str, Any]], info: dict) ->
         f"- Total Requests in Log: {len(request_log)}",
     ])
     for entry in request_log:
-        lines.append(f"- [{entry.get('bucket', 'all')}] status {entry.get('status_code')}, {entry.get('lines', 0)} lines, max={entry.get('max')}")
+        lines.append(f"- [{entry.get('bucket', 'all')}] status {entry.get('status_code')}, {entry.get('lines', 0)} lines, max={entry.get('max')}, cap_hit={entry.get('cap_hit', False)}")
 
     lines.extend([
         "",

@@ -138,7 +138,7 @@ def test_dataset_report_renders_zero_counts_and_ingestion_section(tmp_path):
         "bucket_requests": {"last_6m": 2, "6_18m": 2, "18_36m": 1},
         "drop_stats": {"duplicate": 0, "too_old": 1},
         "request_log": [
-            {"bucket": "last_6m", "status_code": 200, "lines": 10, "max": 1500},
+            {"bucket": "last_6m", "status_code": 200, "lines": 10, "max": 1500, "cap_hit": False},
         ],
     }
     with open(pdir / "ingest_info.json", "w", encoding="utf-8") as f:
@@ -173,6 +173,7 @@ def test_dataset_report_renders_zero_counts_and_ingestion_section(tmp_path):
 
         # 4. Request log summary and ingestion drops
         assert "### Request Log Summary" in content
+        assert "cap_hit=False" in content
         assert "### Ingestion Drops" in content
     finally:
         config_module.DATA_ROOT = orig_data_root

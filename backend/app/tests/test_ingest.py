@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 from unittest.mock import patch
 from app.main import app
@@ -6,12 +7,14 @@ from app import config
 
 client = TestClient(app)
 
+_RELATIVE_UTC_DATE = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y.%m.%d")
+
 def test_ingest_status_flow():
     """Test start ingest and status retrieval."""
     username = "test_player_ingest"
 
-    async def mock_stream_games(uname, max_games=config.DEFAULT_MAX_GAMES):
-        yield '{"id": "g1", "pgn": "[White \\"test_player_ingest\\"]\\n[Black \\"opponent\\"]\\n[UTCDate \\"2024.01.01\\"]\\n[UTCTime \\"12:00:00\\"]\\n[TimeControl \\"180+2\\"]\\n\\n1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 1-0"}'
+    async def mock_stream_games(uname, **kwargs):
+        yield f'{{"id": "g1", "pgn": "[White \\"test_player_ingest\\"]\\n[Black \\"opponent\\"]\\n[UTCDate \\"{_RELATIVE_UTC_DATE}\\"]\\n[UTCTime \\"12:00:00\\"]\\n[TimeControl \\"180+2\\"]\\n\\n1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 1-0"}}'
 
     with patch("app.routers.ingest.stream_games", side_effect=mock_stream_games):
         # Start job
@@ -25,7 +28,8 @@ def test_ingest_status_flow():
         assert status_resp.status_code == 200
         status_data = status_resp.json()
         assert status_data["username"] == username
-        assert "status" in status_data
+        assert status_data["status"] == "failed"
+        assert "Not enough valid games" in status_data.get("error", "")
 
 def test_ingest_conflict_409():
     """Test POST /api/ingest returns 409 if job is active."""
@@ -71,8 +75,8 @@ async def test_retries_used_in_status_and_info_json(tmp_path):
 
         # 2. Completed path
         valid_pgn = (
-            '[Event "Test"]\n[White "user_ok"]\n[Black "opp"]\n'
-            '[UTCDate "2024.01.01"]\n[UTCTime "12:00:00"]\n[TimeControl "180+2"]\n\n'
+            f'[Event "Test"]\n[White "user_ok"]\n[Black "opp"]\n'
+            f'[UTCDate "{_RELATIVE_UTC_DATE}"]\n[UTCTime "12:00:00"]\n[TimeControl "180+2"]\n\n'
             '1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 6. Re1 b5 1-0'
         )
         lines = [json.dumps({"id": f"g_{i}", "pgn": valid_pgn}) for i in range(200)]
@@ -197,7 +201,7 @@ async def test_router_resume_overlap_and_slack(tmp_path):
 
     valid_pgn = (
         f'[Event "Test"]\n[White "{username}"]\n[Black "opp"]\n'
-        '[UTCDate "2024.01.01"]\n[UTCTime "12:00:00"]\n[TimeControl "180+2"]\n\n'
+        f'[UTCDate "{_RELATIVE_UTC_DATE}"]\n[UTCTime "12:00:00"]\n[TimeControl "180+2"]\n\n'
         '1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 6. Re1 b5 1-0'
     )
 

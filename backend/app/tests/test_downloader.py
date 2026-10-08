@@ -160,7 +160,7 @@ async def test_downloader_resume_on_retry():
     yielded_lines = []
     with patch.object(httpx.AsyncClient, "__init__", patched_init), \
          patch("asyncio.sleep", AsyncMock()):
-        stream = stream_games("testuser", max_games=50)
+        stream = stream_games("testuser", max_games=50, windowed=False)
         async for line in stream:
             yielded_lines.append(line)
 
@@ -215,7 +215,7 @@ async def test_downloader_fail_before_any_line():
 
     with patch.object(httpx.AsyncClient, "__init__", patched_init), \
          patch("asyncio.sleep", AsyncMock()):
-        stream = stream_games("testuser", max_games=50)
+        stream = stream_games("testuser", max_games=50, windowed=False)
         async for _ in stream:
             pass
 
@@ -309,7 +309,7 @@ async def test_downloader_missing_created_at_fallback():
     yielded = []
     with patch.object(httpx.AsyncClient, "__init__", patched_init), \
          patch("asyncio.sleep", AsyncMock()):
-        stream = stream_games("testuser", max_games=50)
+        stream = stream_games("testuser", max_games=50, windowed=False)
         async for line in stream:
             yielded.append(line)
 
@@ -630,7 +630,7 @@ async def test_downloader_request_log():
     stats = IngestStats()
     with patch.object(httpx.AsyncClient, "__init__", patched_init), \
          patch("asyncio.sleep", AsyncMock()):
-        stream = stream_games("testuser", max_games=2, stats=stats)
+        stream = stream_games("testuser", max_games=2, stats=stats, windowed=False)
         yielded = [l async for l in stream]
 
     assert len(yielded) == 2
@@ -640,12 +640,14 @@ async def test_downloader_request_log():
     assert entry0["status_code"] == 429
     assert entry0["lines"] == 0
     assert entry0["max"] == 2
+    assert entry0["cap_hit"] is False
 
     entry1 = stats.request_log[1]
     assert entry1["bucket"] == "all"
     assert entry1["status_code"] == 200
     assert entry1["lines"] == 2
     assert entry1["max"] == 2
+    assert entry1["cap_hit"] is True
 
 
 @pytest.mark.asyncio

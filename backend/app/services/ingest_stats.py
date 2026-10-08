@@ -10,6 +10,7 @@ from typing import Optional
 @dataclass
 class IngestStats:
     raw_lines: int = 0
+    lines_parsed: int = 0
     requests: int = 0
     retries_used: int = 0
     skipped_duplicates: int = 0
@@ -23,6 +24,7 @@ class IngestStats:
     def to_dict(self) -> dict:
         return {
             "raw_lines": self.raw_lines,
+            "lines_parsed": self.lines_parsed,
             "requests": self.requests,
             "retries_used": self.retries_used,
             "skipped_duplicates": self.skipped_duplicates,
@@ -38,6 +40,7 @@ class IngestStats:
     def from_dict(cls, data: dict) -> "IngestStats":
         return cls(
             raw_lines=data.get("raw_lines", 0),
+            lines_parsed=data.get("lines_parsed", 0),
             requests=data.get("requests", 0),
             retries_used=data.get("retries_used", 0),
             skipped_duplicates=data.get("skipped_duplicates", 0),

@@ -7,9 +7,6 @@ from pathlib import Path
 # Data root directory (relative to backend)
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
 
-# Default maximum games to download from Lichess API
-DEFAULT_MAX_GAMES = 4000
-
 # Minimum base time in seconds for a time control to be considered (60 seconds)
 MIN_BASE_SECONDS = 60
 
@@ -25,6 +22,9 @@ BUCKET_MAX_AGE_18M = 540   # 18 months
 MAX_AGE_DAYS = 1095        # 3 years (36 months)
 FETCH_SINCE_DAYS = MAX_AGE_DAYS
 PER_BUCKET_FETCH_MAX = 1500  # max per bucket request
+
+# Default maximum games to download from Lichess API (3 * per-bucket cap)
+DEFAULT_MAX_GAMES = 3 * PER_BUCKET_FETCH_MAX
 
 
 def default_since_ms(now=None) -> int:
@@ -55,7 +55,7 @@ MAX_TOTAL_SAMPLED = 1200
 MIN_GAMES_REQUIRED = 150
 
 # Schema version for saved games
-SCHEMA_VERSION = "v1"
+SCHEMA_VERSION = "v2"
 
 
 

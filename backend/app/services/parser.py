@@ -86,8 +86,7 @@ async def parse_stream_into_buckets(
     async for raw_line in stream:
         line_count += 1
         if stats is not None:
-            if stats.raw_lines == 0:
-                stats.raw_lines = line_count
+            stats.lines_parsed = line_count
             stats.drop_stats = drop_stats
         if on_progress:
             on_progress(line_count)

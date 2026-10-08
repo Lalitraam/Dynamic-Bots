@@ -16,6 +16,7 @@ Completed payload includes:
   bullet_count, blitz_count, rapid_count, drop_stats
 """
 
+from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from .. import config
 from ..services.downloader import stream_games
@@ -66,9 +67,10 @@ async def _run_ingest(username: str) -> None:
     stats = IngestStats()
     try:
         # 1. Stream and parse
-        stream = stream_games(username, overlap_ms=config.OVERLAP_MS, stats=stats)
+        now = datetime.now(timezone.utc)
+        stream = stream_games(username, overlap_ms=config.OVERLAP_MS, stats=stats, now=now)
         buckets, total_valid, drop_stats = await parse_stream_into_buckets(
-            stream, username, on_progress=on_progress, stats=stats
+            stream, username, on_progress=on_progress, stats=stats, now=now
         )
 
         _jobs[key]["status"] = "parsing_and_filtering"
