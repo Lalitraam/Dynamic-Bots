@@ -1,4 +1,4 @@
-﻿"""
+"""
 Tests for app/ml/model.py  (Phase 1 - Milestone 3).
 
 Coverage

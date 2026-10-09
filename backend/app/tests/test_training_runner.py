@@ -104,7 +104,49 @@ def test_train_player_model_smoke(tmp_path):
             assert not torch.isnan(torch.tensor(train_loss))
             assert not torch.isinf(torch.tensor(train_loss))
 
-        # Check predict_move on the saved model
+        # FIX 3d: Assert model_config equals overrides used (16/1/32)
+        assert saved_info["model_config"] == {
+            "channels": 16,
+            "num_res_blocks": 1,
+            "hidden_dim": 32,
+            "dropout": config.MODEL_DROPOUT,
+        }
+
+        # FIX 3d: Assert dataset_sha256 matches samples.parquet
+        from app.services import storage
+        samples_path = player_dir / "samples.parquet"
+        assert saved_info["dataset_sha256"] == storage.file_sha256(samples_path)
+
+        # FIX 3d: Assert meta_defaults has all keys
+        meta_defaults = saved_info["meta_defaults"]
+        assert set(meta_defaults.keys()) == {
+            "player_rating",
+            "opponent_rating",
+            "base_seconds",
+            "increment_seconds",
+            "clock_available",
+            "median_clock_ratio",
+        }
+
+        # FIX 3d: load_player_model("testuser") returns model with .channels == 16
+        # and predict_move works with meta_inputs_from_defaults
+        loaded_player_model = export.load_player_model("testuser")
+        assert loaded_player_model.channels == 16
+        board = chess.Board()
+        meta_inputs = export.meta_inputs_from_defaults(meta_defaults)
+        move = export.predict_move(loaded_player_model, board, meta_inputs=meta_inputs)
+        assert move in board.legal_moves
+
+        # FIX 3d: is_model_current is True, then after appending one byte to
+        # COPY-then-replace of samples.parquet inside tmp_path it is False
+        assert export.is_model_current("testuser") is True
+        content = samples_path.read_bytes()
+        temp_parquet = player_dir / "samples_copy.parquet"
+        temp_parquet.write_bytes(content + b"\x00")
+        temp_parquet.replace(samples_path)
+        assert export.is_model_current("testuser") is False
+
+        # Existing assert: Check predict_move on the saved model with load_model
         loaded_model = export.load_model(
             model_path,
             channels=16,
@@ -112,12 +154,37 @@ def test_train_player_model_smoke(tmp_path):
             hidden_dim=32,
             dropout=0.0,
         )
-        board = chess.Board()
-        move = export.predict_move(loaded_model, board)
-        assert move in board.legal_moves
+        move_old = export.predict_move(loaded_model, board)
+        assert move_old in board.legal_moves
 
     finally:
         config.DATA_ROOT = orig_data_root
+
+
+def test_load_player_model_legacy_fallback(tmp_path, monkeypatch):
+    """FIX 3d: where training_info.json has no 'model_config', load_player_model
+    falls back to config defaults; raises FileNotFoundError when model.pt is missing."""
+    monkeypatch.setattr(config, "DATA_ROOT", tmp_path)
+
+    # Missing model.pt raises FileNotFoundError with a clear message
+    with pytest.raises(FileNotFoundError, match="Model checkpoint not found"):
+        export.load_player_model("legacyuser")
+
+    user_dir = tmp_path / "players" / "legacyuser"
+    user_dir.mkdir(parents=True, exist_ok=True)
+
+    default_model = ChessPolicyNet()
+    export.save_model(default_model, user_dir / "model.pt")
+
+    # training_info.json without model_config
+    with open(user_dir / "training_info.json", "w", encoding="utf-8") as f:
+        json.dump({"username": "legacyuser", "created_at": "2026-01-01T00:00:00"}, f)
+
+    loaded = export.load_player_model("legacyuser")
+    assert loaded.channels == config.MODEL_CHANNELS
+    assert len(loaded.res_blocks) == config.MODEL_RES_BLOCKS
+    assert loaded.hidden_dim == config.MODEL_HIDDEN_DIM
+
 
 
 def test_train_model_empty_val_loader():

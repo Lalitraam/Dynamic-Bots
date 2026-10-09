@@ -23,13 +23,12 @@ def load_fixture_games():
             games.append(game)
     return games
 
-def test_build_dataset_and_dataloader(tmp_path):
+def test_build_dataset_and_dataloader(tmp_path, monkeypatch):
     # Override storage directory
     import app.services.storage as storage_module
     import app.config as config_module
     
-    orig_data_root = config_module.DATA_ROOT
-    config_module.DATA_ROOT = tmp_path
+    monkeypatch.setattr(config_module, "DATA_ROOT", tmp_path)
     
     games = load_fixture_games()
     
@@ -81,7 +80,6 @@ def test_build_dataset_and_dataloader(tmp_path):
     
     assert "legal_mask" in batch
     assert batch["legal_mask"].shape == (2, 64, 64)
-    config_module.DATA_ROOT = orig_data_root
 
 
 def test_dataset_builder_retries_used_single_source_of_truth(tmp_path):

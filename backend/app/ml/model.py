@@ -1,4 +1,4 @@
-﻿"""
+"""
 CNN architecture for chess player-cloning (Milestone 3).
 
 Class: ChessPolicyNet

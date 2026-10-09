@@ -202,3 +202,106 @@ def load_model(
     model.to(device)
     model.eval()
     return model
+
+
+def load_player_model(
+    username: str,
+    device: torch.device | str = "cpu",
+) -> ChessPolicyNet:
+    """
+    Load a trained policy network for a player.
+    Reads training_info.json 'model_config'; falls back to config defaults
+    if the key is missing (legacy model).
+    Raises FileNotFoundError with a clear message if model.pt is missing.
+    """
+    from ..services import storage
+    import json
+
+    pdir = storage.player_dir(username, create=False)
+    model_path = pdir / "model.pt"
+    if not model_path.exists():
+        raise FileNotFoundError(
+            f"Model checkpoint not found for player '{username}' at {model_path}"
+        )
+
+    info_path = pdir / "training_info.json"
+    model_kwargs = None
+    if info_path.exists():
+        try:
+            with open(info_path, "r", encoding="utf-8") as f:
+                t_info = json.load(f)
+            model_kwargs = t_info.get("model_config")
+        except Exception:
+            model_kwargs = None
+
+    if not model_kwargs:
+        model_kwargs = {
+            "channels": config.MODEL_CHANNELS,
+            "num_res_blocks": config.MODEL_RES_BLOCKS,
+            "hidden_dim": config.MODEL_HIDDEN_DIM,
+            "dropout": config.MODEL_DROPOUT,
+        }
+
+    return load_model(model_path, device=device, **model_kwargs)
+
+
+def meta_inputs_from_defaults(defaults: dict) -> dict:
+    """
+    Returns kwargs usable as predict_move's meta_inputs:
+    player_rating, opponent_rating, base_seconds, increment_seconds,
+    clock_available, clock_before (= base_seconds * median_clock_ratio
+    when clock_available and ratio not None, else None;
+    when clock_before is None force clock_available False).
+    """
+    player_rating = defaults.get("player_rating", 1500)
+    opponent_rating = defaults.get("opponent_rating", 1500)
+    base_seconds = defaults.get("base_seconds", 300)
+    increment_seconds = defaults.get("increment_seconds", 0)
+    clock_available = bool(defaults.get("clock_available", False))
+    median_clock_ratio = defaults.get("median_clock_ratio")
+
+    if clock_available and median_clock_ratio is not None and base_seconds is not None:
+        clock_before = float(base_seconds * median_clock_ratio)
+    else:
+        clock_before = None
+
+    if clock_before is None:
+        clock_available = False
+
+    return {
+        "player_rating": player_rating,
+        "opponent_rating": opponent_rating,
+        "base_seconds": base_seconds,
+        "increment_seconds": increment_seconds,
+        "clock_available": clock_available,
+        "clock_before": clock_before,
+    }
+
+
+def is_model_current(username: str) -> bool:
+    """
+    True only if training_info.json has 'dataset_sha256' equal to
+    file_sha256(current samples.parquet); False if anything is missing.
+    """
+    from ..services import storage
+    import json
+
+    try:
+        pdir = storage.player_dir(username, create=False)
+        info_path = pdir / "training_info.json"
+        samples_path = pdir / "samples.parquet"
+        if not info_path.exists() or not samples_path.exists():
+            return False
+
+        with open(info_path, "r", encoding="utf-8") as f:
+            t_info = json.load(f)
+
+        stored_hash = t_info.get("dataset_sha256")
+        if not stored_hash:
+            return False
+
+        current_hash = storage.file_sha256(samples_path)
+        return stored_hash == current_hash
+    except Exception:
+        return False
+

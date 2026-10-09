@@ -22,7 +22,7 @@ from .. import config
 from ..services.downloader import stream_games
 from ..services.parser import parse_stream_into_buckets
 from ..services.sampler import sample_games
-from ..services.storage import save_games
+from ..services.storage import save_games, validate_username
 from ..services.ingest_stats import IngestStats
 
 router = APIRouter()
@@ -170,7 +170,11 @@ async def start_ingest(username: str, background_tasks: BackgroundTasks):
     Returns 409 if a job is already active.
     Returns 202 Accepted with the initial status payload.
     """
-    key = username.lower()
+    try:
+        key = validate_username(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
     existing = _jobs.get(key, {})
     if existing.get("status") in _ACTIVE_STATUSES:
         raise HTTPException(
@@ -188,7 +192,11 @@ async def start_ingest(username: str, background_tasks: BackgroundTasks):
 @router.get("/status/{username}")
 async def get_status(username: str):
     """Return the current job status for *username*."""
-    key = username.lower()
+    try:
+        key = validate_username(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
     job = _jobs.get(key)
     if job is not None:
         return job
@@ -196,14 +204,15 @@ async def get_status(username: str):
     # Fallback to ingest_info.json and info.json on disk
     from ..services.storage import player_dir
     import json
-    pdir = player_dir(key)
+    pdir = player_dir(key, create=False)
     ingest_info_path = pdir / "ingest_info.json"
     info_path = pdir / "info.json"
 
     if ingest_info_path.exists() or info_path.exists():
+        status = "completed" if info_path.exists() else "incomplete"
         resp = {
             "username": key,
-            "status": "completed",
+            "status": status,
             "progress": 100.0,
             "retries_used": 0,
             "requests": 0,

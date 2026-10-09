@@ -4,7 +4,7 @@ Configuration constants for the Chess Bot Clone Factory.
 
 from pathlib import Path
 
-# Data root directory (relative to backend)
+# Data root directory (resolves to the repo-root data/ folder, the parent of backend/)
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
 
 # Minimum base time in seconds for a time control to be considered (60 seconds)
@@ -62,7 +62,7 @@ SCHEMA_VERSION = "v2"
 def model_tier(n_games: int) -> str:
     """
     Determine the model tier based on the number of games sampled.
-    Raises ValueError if n_games < MIN_GAMES_REQUIRED.
+    Returns "rejected" if n_games < MIN_GAMES_REQUIRED.
     """
     if n_games < MIN_GAMES_REQUIRED:
         return "rejected"
@@ -124,4 +124,4 @@ MODEL_HIDDEN_DIM = 256
 MODEL_DROPOUT = 0.3
 TRAIN_SEED = 42
 INFERENCE_TEMPERATURE_DEFAULT = 1.0
-OPENING_BOOK_PLY_CUTOFF = 10   # used only by evaluate.py's "opening divergence" metric
+OPENING_BOOK_PLY_CUTOFF = 10   # currently unused / reserved

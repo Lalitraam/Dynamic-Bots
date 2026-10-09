@@ -1,4 +1,5 @@
 import pytest
+import httpx
 from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 from unittest.mock import patch
@@ -153,6 +154,8 @@ async def test_ingest_stats_fallback_and_drop_stats_retention(tmp_path):
             await _run_ingest("fail_user")
 
         assert _jobs["fail_user"]["status"] == "failed"
+        assert "Broken mid stream" in _jobs["fail_user"]["error"]
+        assert "not defined" not in _jobs["fail_user"]["error"]
         assert _jobs["fail_user"]["drop_stats"] is not None
         assert _jobs["fail_user"]["drop_stats"]["no_pgn"] == 1
 
@@ -252,5 +255,70 @@ async def test_router_resume_overlap_and_slack(tmp_path):
         assert _jobs[username]["status"] == "completed"
     finally:
         config_module.DATA_ROOT = orig_data_root
+
+
+def test_ingest_username_validation_and_status_no_mkdir(tmp_path, monkeypatch):
+    """FIX 2d: Validate invalid names return 422, Valid_Name-1 accepted, and
+    GET /api/status/unknownuser returns 404 without creating the directory on disk."""
+    import app.config as config_module
+    from app.routers.ingest import _jobs
+
+    monkeypatch.setattr(config_module, "DATA_ROOT", tmp_path)
+
+    invalid_names = ["a", "bad name", "a.b", "x" * 31, "-abc"]
+    for bad in invalid_names:
+        resp_post = client.post(f"/api/ingest/{bad}")
+        assert resp_post.status_code == 422
+        resp_get = client.get(f"/api/status/{bad}")
+        assert resp_get.status_code == 422
+        assert bad.lower() not in _jobs
+
+    # Valid name accepted
+    async def mock_stream_empty(*args, **kwargs):
+        if False:
+            yield ""
+
+    with patch("app.routers.ingest.stream_games", side_effect=mock_stream_empty):
+        resp_post = client.post("/api/ingest/Valid_Name-1")
+        assert resp_post.status_code == 202
+
+    # GET /api/status/unknownuser returns 404 and does NOT create players/unknownuser
+    unknown = "unknownuser"
+    _jobs.pop(unknown, None)
+    resp_unknown = client.get(f"/api/status/{unknown}")
+    assert resp_unknown.status_code == 404
+    assert not (tmp_path / "players" / unknown).exists()
+
+
+def test_status_disk_fallback_incomplete_vs_completed(tmp_path, monkeypatch):
+    """FIX 5: Status fallback returns 'incomplete' if only ingest_info.json exists,
+    and 'completed' once info.json exists."""
+    import json
+    import app.config as config_module
+    from app.services.storage import player_dir
+    from app.routers.ingest import _jobs
+
+    monkeypatch.setattr(config_module, "DATA_ROOT", tmp_path)
+
+    user = "fallback_test_user"
+    _jobs.pop(user, None)
+    pdir = player_dir(user, create=True)
+
+    # 1. Only ingest_info.json exists -> status should be 'incomplete'
+    with open(pdir / "ingest_info.json", "w", encoding="utf-8") as f:
+        json.dump({"raw_lines": 50, "requests": 1, "retries_used": 0}, f)
+
+    resp = client.get(f"/api/status/{user}")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "incomplete"
+
+    # 2. info.json exists -> status should be 'completed'
+    with open(pdir / "info.json", "w", encoding="utf-8") as f:
+        json.dump({"total_samples": 400, "model_tier": "small"}, f)
+
+    resp = client.get(f"/api/status/{user}")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "completed"
+
 
 

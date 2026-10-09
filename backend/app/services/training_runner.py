@@ -25,6 +25,7 @@ from ..ml.dataset import PlayerMoveDataset
 from ..ml.model import ChessPolicyNet
 from ..ml.train import train_model
 from . import storage
+from . import classifier
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,42 @@ def train_player_model(
     model_pt_path = p_dir / "model.pt"
     export.save_model(model, model_pt_path)
 
-    # 7. Assemble training_info and training_report
+    # 7. Compute meta_defaults from train dataframe
+    from collections import Counter
+    train_df = train_dataset.df
+    player_rating_med = int(train_df["player_rating"].median()) if not train_df.empty else 1500
+    opp_rating_med = int(train_df["opponent_rating"].median()) if not train_df.empty else 1500
+
+    parsed_tcs = [classifier.parse_time_control(tc) for tc in train_df["time_control"].dropna()] if "time_control" in train_df.columns else []
+    valid_tcs = [pt for pt in parsed_tcs if pt is not None]
+    if valid_tcs:
+        base_sec = int(Counter(pt[0] for pt in valid_tcs).most_common(1)[0][0])
+        inc_sec = int(Counter(pt[1] for pt in valid_tcs).most_common(1)[0][0])
+    else:
+        base_sec = 0
+        inc_sec = 0
+
+    if "clock_before_move" in train_df.columns and not train_df.empty:
+        clock_avail = bool((train_df["clock_before_move"].notna().mean() > 0.5))
+        valid_clocks = train_df["clock_before_move"].dropna()
+        if not valid_clocks.empty and base_sec > 0:
+            median_clock_ratio = float((valid_clocks / base_sec).median())
+        else:
+            median_clock_ratio = None
+    else:
+        clock_avail = False
+        median_clock_ratio = None
+
+    meta_defaults = {
+        "player_rating": player_rating_med,
+        "opponent_rating": opp_rating_med,
+        "base_seconds": base_sec,
+        "increment_seconds": inc_sec,
+        "clock_available": clock_avail,
+        "median_clock_ratio": median_clock_ratio,
+    }
+
+    # 8. Assemble training_info and training_report
     now_iso = datetime.now(timezone.utc).isoformat()
     training_info: dict[str, Any] = {
         "schema_version": "1.0.0",
@@ -125,6 +161,9 @@ def train_player_model(
         "epochs_run": train_results["epochs_run"],
         "best_val_loss": train_results["best_val_loss"],
         "history": train_results["history"],
+        "model_config": model_kwargs,
+        "dataset_sha256": storage.file_sha256(samples_path),
+        "meta_defaults": meta_defaults,
         "hyperparameters": {
             "batch_size": batch_size,
             "lr": (overrides or {}).get("TRAIN_LR", config.TRAIN_LR),

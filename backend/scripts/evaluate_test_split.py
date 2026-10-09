@@ -1,5 +1,5 @@
 """
-Evaluate trained The_King_Crusher model on the held-out test split (4,955 positions)
+Evaluate trained model on the held-out test split
 and generate training curve plots.
 """
 import sys
@@ -22,24 +22,21 @@ from app.services import storage
 
 
 def evaluate_test_set():
-    username = "the_king_crusher"
-    p_dir = storage.player_dir(username)
-    model_path = p_dir / "model.pt"
+    username = sys.argv[1] if len(sys.argv) > 1 else "the_king_crusher"
+    p_dir = storage.player_dir(username, create=False)
     samples_path = p_dir / "samples.parquet"
 
     print("=" * 60)
-    print("EVALUATING MODEL ON HELD-OUT TEST SPLIT")
+    print(f"EVALUATING MODEL ON HELD-OUT TEST SPLIT FOR '{username}'")
     print("=" * 60)
 
+    if not export.is_model_current(username):
+        print("!" * 70)
+        print(f"WARNING: Model checkpoint for '{username}' is NOT current with samples.parquet!")
+        print("!" * 70)
+
     # 1. Load Model
-    model = export.load_model(
-        model_path,
-        device="cpu",
-        channels=config.MODEL_CHANNELS,
-        num_res_blocks=config.MODEL_RES_BLOCKS,
-        hidden_dim=config.MODEL_HIDDEN_DIM,
-        dropout=config.MODEL_DROPOUT,
-    )
+    model = export.load_player_model(username, device="cpu")
     model.eval()
 
     # 2. Test DataLoader
@@ -59,6 +56,8 @@ def evaluate_test_set():
     correct_to_top1 = 0
     correct_to_top3 = 0
     correct_exact_top1 = 0
+    correct_masked_from_top1 = 0
+    correct_masked_exact_top1 = 0
 
     total_samples = 0
 
@@ -89,6 +88,23 @@ def evaluate_test_set():
             correct_to_top1 += (pred_to == to_targets).sum().item()
             correct_exact_top1 += ((pred_from == from_targets) & (pred_to == to_targets)).sum().item()
 
+            # Legal-masked calculations using batch["legal_mask"]
+            from_mask = batch["legal_mask"].any(dim=-1)  # (B, 64)
+            masked_from_logits = from_logits.clone()
+            masked_from_logits[~from_mask] = float("-inf")
+            pred_from_masked = masked_from_logits.argmax(dim=-1)
+
+            b_indices = torch.arange(len(from_targets), device=from_logits.device)
+            to_mask = batch["legal_mask"][b_indices, pred_from_masked]  # (B, 64)
+            masked_to_logits = to_logits.clone()
+            masked_to_logits[~to_mask] = float("-inf")
+            pred_to_masked = masked_to_logits.argmax(dim=-1)
+
+            correct_masked_from_top1 += (pred_from_masked == from_targets).sum().item()
+            correct_masked_exact_top1 += (
+                (pred_from_masked == from_targets) & (pred_to_masked == to_targets)
+            ).sum().item()
+
             # Top-3
             _, top3_from = from_logits.topk(3, dim=-1)
             _, top3_to = to_logits.topk(3, dim=-1)
@@ -109,6 +125,8 @@ def evaluate_test_set():
         "to_top1_acc": (correct_to_top1 / total_samples) * 100,
         "to_top3_acc": (correct_to_top3 / total_samples) * 100,
         "exact_move_top1_acc": (correct_exact_top1 / total_samples) * 100,
+        "masked_from_top1": (correct_masked_from_top1 / total_samples) * 100,
+        "masked_exact_top1": (correct_masked_exact_top1 / total_samples) * 100,
         "total_test_positions": total_samples,
     }
 
@@ -124,6 +142,8 @@ def evaluate_test_set():
     print(f"To-Square Top-1 Acc:  {metrics['to_top1_acc']:.2f}%")
     print(f"To-Square Top-3 Acc:  {metrics['to_top3_acc']:.2f}%")
     print(f"Exact Move Top-1 Acc: {metrics['exact_move_top1_acc']:.2f}%")
+    print(f"Masked From Top-1:    {metrics['masked_from_top1']:.2f}%")
+    print(f"Masked Exact Top-1:   {metrics['masked_exact_top1']:.2f}%")
 
     # Save metrics to json
     test_metrics_path = p_dir / "test_evaluation_metrics.json"
@@ -149,7 +169,17 @@ def evaluate_test_set():
     # Plot 1: Total Train vs Val Loss
     axes[0].plot(epochs, train_loss, 'o-', color='#2563eb', label='Train Loss', linewidth=2)
     axes[0].plot(epochs, val_loss, 's--', color='#dc2626', label='Val Loss', linewidth=2)
-    axes[0].axvline(x=14, color='#16a34a', linestyle=':', label='Best Val (Epoch 14, 4.9756)')
+
+    valid_vals = [(h["epoch"], h["val_loss"]) for h in history if h.get("val_loss") is not None]
+    if valid_vals:
+        best_epoch, best_val = min(valid_vals, key=lambda x: x[1])
+        axes[0].axvline(
+            x=best_epoch,
+            color='#16a34a',
+            linestyle=':',
+            label=f'Best Val (Epoch {best_epoch}, {best_val:.4f})',
+        )
+
     axes[0].set_title('Total Loss Progression (Train vs Val)', fontsize=13, fontweight='bold')
     axes[0].set_xlabel('Epoch', fontsize=11)
     axes[0].set_ylabel('Loss', fontsize=11)
@@ -181,6 +211,7 @@ def evaluate_test_set():
 
     # Also copy chart to backup directory
     backup_chart = config.DATA_ROOT / "players_backup" / username / "training_curves.png"
+    backup_chart.parent.mkdir(parents=True, exist_ok=True)
     import shutil
     shutil.copy2(chart_path, backup_chart)
     print(f"Copied chart to backup: {backup_chart}")

@@ -105,6 +105,36 @@ def test_load_games_empty():
         finally:
             config_module.DATA_ROOT = original_data_root
 
+
+def test_username_validation(tmp_path, monkeypatch):
+    import pytest
+    from app.services.storage import validate_username, player_dir
+    import app.config as config_module
+
+    monkeypatch.setattr(config_module, "DATA_ROOT", tmp_path)
+
+    invalid_names = ["a", "bad name", "a.b", "x" * 31, "-abc"]
+    for bad_name in invalid_names:
+        with pytest.raises(ValueError, match="Invalid Lichess username"):
+            validate_username(bad_name)
+        with pytest.raises(ValueError, match="Invalid Lichess username"):
+            player_dir(bad_name)
+
+    valid = "Valid_Name-1"
+    lowered = validate_username(valid)
+    assert lowered == "valid_name-1"
+
+    # player_dir with create=True creates directory
+    pdir = player_dir(valid, create=True)
+    assert pdir.exists()
+    assert pdir == tmp_path / "players" / "valid_name-1"
+
+    # player_dir with create=False does not create directory
+    target_nonexistent = tmp_path / "players" / "other_valid"
+    assert not target_nonexistent.exists()
+    pdir_no_create = player_dir("other_valid", create=False)
+    assert not pdir_no_create.exists()
+
 if __name__ == "__main__":
     # For manual testing
     import tempfile

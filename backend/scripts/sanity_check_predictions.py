@@ -21,21 +21,31 @@ from app import config
 
 
 def main():
-    username = "the_king_crusher"
-    p_dir = storage.player_dir(username)
-    model_path = p_dir / "model.pt"
+    username = sys.argv[1] if len(sys.argv) > 1 else "the_king_crusher"
+    p_dir = storage.player_dir(username, create=False)
 
     print("=" * 60)
-    print(f"Loading trained model for '{username}' from {model_path}...")
-    model = export.load_model(
-        model_path,
-        device="cpu",
-        channels=config.MODEL_CHANNELS,
-        num_res_blocks=config.MODEL_RES_BLOCKS,
-        hidden_dim=config.MODEL_HIDDEN_DIM,
-        dropout=config.MODEL_DROPOUT,
-    )
+    if not export.is_model_current(username):
+        print("!" * 70)
+        print(f"WARNING: Model checkpoint for '{username}' is NOT current with samples.parquet!")
+        print("!" * 70)
+
+    print(f"Loading trained model for '{username}'...")
+    model = export.load_player_model(username, device="cpu")
     print("Model loaded successfully.")
+
+    # Read meta_defaults if present
+    info_path = p_dir / "training_info.json"
+    meta_inputs = None
+    if info_path.exists():
+        try:
+            import json
+            with open(info_path, "r", encoding="utf-8") as f:
+                t_info = json.load(f)
+            if "meta_defaults" in t_info:
+                meta_inputs = export.meta_inputs_from_defaults(t_info["meta_defaults"])
+        except Exception:
+            meta_inputs = None
 
     print(f"Loading OpeningBook for '{username}'...")
     book = OpeningBook(username)
@@ -56,6 +66,7 @@ def main():
         move = export.predict_move(
             model=model,
             board=board,
+            meta_inputs=meta_inputs,
             device="cpu",
             temperature=1.0,
             opening_book=book,
@@ -85,6 +96,7 @@ def main():
         move = export.predict_move(
             model=model,
             board=fresh_board,
+            meta_inputs=meta_inputs,
             device="cpu",
             temperature=1.0,
             opening_book=book,

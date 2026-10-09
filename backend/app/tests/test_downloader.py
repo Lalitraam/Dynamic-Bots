@@ -264,10 +264,10 @@ async def test_downloader_warning_log_on_retry(caplog):
     warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warning_records) == 1
     log_text = warning_records[0].message
-    assert "1" in log_text
+    assert "attempt 1/5" in log_text
     assert "ReadError" in log_text
-    assert "1" in log_text
-    assert "1700000000000" in log_text
+    assert "1 lines yielded" in log_text
+    assert "until=1700000000000" in log_text
 
 
 @pytest.mark.asyncio

@@ -1,18 +1,46 @@
 """
 Storage service for persisting sampled games to disk.
 """
+import hashlib
 import json
+import re
 from pathlib import Path
 from .. import config
 
-def player_dir(username: str) -> Path:
+_USERNAME_REGEX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,29}$")
+
+
+def validate_username(username: str) -> str:
+    """
+    Validates a Lichess username.
+    Must start with an alphanumeric character and be 2-30 characters long
+    containing only letters, numbers, underscores, and hyphens.
+    Raises ValueError("Invalid Lichess username") otherwise.
+    Returns the lowercased username.
+    """
+    if not isinstance(username, str) or not _USERNAME_REGEX.match(username):
+        raise ValueError("Invalid Lichess username")
+    return username.lower()
+
+
+def file_sha256(path: Path | str) -> str:
+    """Compute SHA-256 hex digest of a file using chunked reading."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def player_dir(username: str, create: bool = True) -> Path:
     """
     Returns the directory for a given player's data.
-    Creates the directory if it doesn't exist.
+    Validates username and creates the directory if create is True.
     """
-    username = username.lower()
+    username = validate_username(username)
     dir_path = Path(config.DATA_ROOT) / "players" / username
-    dir_path.mkdir(parents=True, exist_ok=True)
+    if create:
+        dir_path.mkdir(parents=True, exist_ok=True)
     return dir_path
 
 

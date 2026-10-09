@@ -22,18 +22,14 @@ def load_fixture_games():
             games.append(game)
     return games
 
-def test_opening_book(tmp_path):
+def test_opening_book(tmp_path, monkeypatch):
     import app.services.storage as storage_module
     import app.config as config_module
     
-    orig_data_root = config_module.DATA_ROOT
-    config_module.DATA_ROOT = tmp_path
+    monkeypatch.setattr(config_module, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(config_module, "MIN_BOOK_VISITS", 1)
     
     games = load_fixture_games()
-    
-    # We use a mocked min book visits of 1 for testing, since we have few games
-    orig_min_visits = config_module.MIN_BOOK_VISITS
-    config_module.MIN_BOOK_VISITS = 1
     
     with patch("app.services.extractor.storage.load_games", return_value=games):
         # The fixture has 4 games sorted chronologically: game1, game2, game3_ep_promo, game_noclock.
@@ -61,9 +57,6 @@ def test_opening_book(tmp_path):
     assert move.uci() in probs
     
     # Check threshold logic
-    config_module.MIN_BOOK_VISITS = 100
+    monkeypatch.setattr(config_module, "MIN_BOOK_VISITS", 100)
     assert book.query(board) is None
     assert book.sample(board) is None
-    
-    config_module.MIN_BOOK_VISITS = orig_min_visits
-    config_module.DATA_ROOT = orig_data_root
