@@ -16,6 +16,10 @@ env/
 .venv/
 ENV/
 
+# Frontend and dependencies
+node_modules/
+frontend/dist/
+
 # IDE and Editor configurations
 .vscode/
 .idea/
@@ -27,7 +31,7 @@ Thumbs.db
 
 # Text files and scratch files (requested)
 *.txt
-!backend/requirements.txt
+!backend/requirements*.txt
 scratch/
 
 # Project summary notes and task scratch
@@ -38,6 +42,8 @@ scratch/
 data/
 backend/data/
 *.parquet
+*.npy
+*.npz
 *.pt
 *.pth
 *.jsonl
