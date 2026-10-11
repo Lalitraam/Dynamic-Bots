@@ -161,4 +161,5 @@ The complete pipeline was validated end-to-end on live data from Lichess master 
 ---
 
 ## 📜 License
+License: GPL-3.0-or-later (python-chess and Stockfish are GPL-3.0).
 This project is open-source and intended for educational and research purposes in behavioral imitation learning.
