@@ -182,6 +182,13 @@ async def start_ingest(username: str, background_tasks: BackgroundTasks):
             detail=f"Job for '{key}' is already {existing['status']}.",
         )
 
+    from .train import _train_jobs, _ACTIVE_STATUSES as _TRAIN_ACTIVE
+    if _train_jobs.get(key, {}).get("status") in _TRAIN_ACTIVE:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Training job for '{key}' is active.",
+        )
+
     # Set queued synchronously BEFORE adding the background task.
     _jobs[key] = {"status": "queued", "username": key, "progress": 0.0}
     background_tasks.add_task(_run_ingest, username)

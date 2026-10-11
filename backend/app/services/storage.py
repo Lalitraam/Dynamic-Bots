@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from .. import config
 
-_USERNAME_REGEX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,29}$")
+_USERNAME_REGEX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{1,29}")
 
 
 def validate_username(username: str) -> str:
@@ -18,7 +18,7 @@ def validate_username(username: str) -> str:
     Raises ValueError("Invalid Lichess username") otherwise.
     Returns the lowercased username.
     """
-    if not isinstance(username, str) or not _USERNAME_REGEX.match(username):
+    if not isinstance(username, str) or not _USERNAME_REGEX.fullmatch(username):
         raise ValueError("Invalid Lichess username")
     return username.lower()
 

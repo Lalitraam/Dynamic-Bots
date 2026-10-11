@@ -74,6 +74,8 @@ def train_player_model(
             f"samples.parquet not found for '{username}' in {p_dir}."
         )
 
+    dataset_sha256 = storage.file_sha256(samples_path)
+
     train_dataset = PlayerMoveDataset(str(samples_path), split="train")
     val_dataset = PlayerMoveDataset(str(samples_path), split="val")
     # test_dataset = PlayerMoveDataset(str(samples_path), split="test")
@@ -162,7 +164,7 @@ def train_player_model(
         "best_val_loss": train_results["best_val_loss"],
         "history": train_results["history"],
         "model_config": model_kwargs,
-        "dataset_sha256": storage.file_sha256(samples_path),
+        "dataset_sha256": dataset_sha256,
         "meta_defaults": meta_defaults,
         "hyperparameters": {
             "batch_size": batch_size,

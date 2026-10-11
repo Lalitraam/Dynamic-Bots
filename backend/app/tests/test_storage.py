@@ -113,7 +113,7 @@ def test_username_validation(tmp_path, monkeypatch):
 
     monkeypatch.setattr(config_module, "DATA_ROOT", tmp_path)
 
-    invalid_names = ["a", "bad name", "a.b", "x" * 31, "-abc"]
+    invalid_names = ["a", "bad name", "a.b", "x" * 31, "-abc", "abc\n"]
     for bad_name in invalid_names:
         with pytest.raises(ValueError, match="Invalid Lichess username"):
             validate_username(bad_name)

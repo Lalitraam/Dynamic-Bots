@@ -42,6 +42,18 @@ def test_ingest_conflict_409():
     assert resp.status_code == 409
 
 
+def test_ingest_conflict_while_training_active():
+    """Test POST /api/ingest returns 409 if training job is active."""
+    from app.routers.train import _train_jobs
+    username = "busy_trainer"
+    _train_jobs[username] = {"status": "running"}
+    try:
+        resp = client.post(f"/api/ingest/{username}")
+        assert resp.status_code == 409
+    finally:
+        _train_jobs.pop(username, None)
+
+
 @pytest.mark.asyncio
 async def test_retries_used_in_status_and_info_json(tmp_path):
     """T9 retries_used exposure: appears in status payload for completed and failed path,
