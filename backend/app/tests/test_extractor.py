@@ -334,3 +334,81 @@ def test_extractor_no_clock_game_gives_none():
         assert row["target_berserk"] is False
 
 
+def test_extract_samples_illegal_move_value_error_discards_game(mock_storage, monkeypatch):
+    """Defect D13: ValueError during move push discards that game's rows and increments drop_stats."""
+    import sys
+    import chess
+    orig_push = chess.Board.push
+
+    push_count = 0
+    def faulty_push(board_self, move):
+        nonlocal push_count
+        caller = sys._getframe(1).f_code.co_name
+        if caller == "extract_samples":
+            push_count += 1
+            if push_count == 6:  # ply 5 of the first game (game1)
+                assert len(board_self.move_stack) == 5
+                raise ValueError("Simulated illegal move at ply 5")
+        return orig_push(board_self, move)
+
+    monkeypatch.setattr(chess.Board, "push", faulty_push)
+
+    samples, drop_stats = extract_samples("targetplayer")
+
+    game1_samples = [s for s in samples if s["game_id"] == "game1"]
+    assert len(game1_samples) == 0
+    assert drop_stats["illegal_move"] == 1
+    assert len(samples) == 57
+    assert len([s for s in samples if s["game_id"] == "game2"]) == 6
+    assert len([s for s in samples if s["game_id"] == "game3_ep_promo"]) == 47
+    assert len([s for s in samples if s["game_id"] == "game_noclock"]) == 4
+
+
+def test_extract_samples_illegal_move_assertion_error_discards_game(mock_storage, monkeypatch):
+    """Defect D13: AssertionError during move push discards that game's rows and increments drop_stats."""
+    import sys
+    import chess
+    orig_push = chess.Board.push
+
+    push_count = 0
+    def faulty_push(board_self, move):
+        nonlocal push_count
+        caller = sys._getframe(1).f_code.co_name
+        if caller == "extract_samples":
+            push_count += 1
+            if push_count == 6:  # ply 5 of the first game (game1)
+                assert len(board_self.move_stack) == 5
+                raise AssertionError("Simulated assertion error at ply 5")
+        return orig_push(board_self, move)
+
+    monkeypatch.setattr(chess.Board, "push", faulty_push)
+
+    samples, drop_stats = extract_samples("targetplayer")
+
+    game1_samples = [s for s in samples if s["game_id"] == "game1"]
+    assert len(game1_samples) == 0
+    assert drop_stats["illegal_move"] == 1
+    assert len(samples) == 57
+    assert len([s for s in samples if s["game_id"] == "game2"]) == 6
+    assert len([s for s in samples if s["game_id"] == "game3_ep_promo"]) == 47
+    assert len([s for s in samples if s["game_id"] == "game_noclock"]) == 4
+
+
+def test_extract_samples_runtime_error_propagates(mock_storage, monkeypatch):
+    """Defect D13: Unexpected exceptions (e.g. RuntimeError) propagate out of extract_samples."""
+    import sys
+    import chess
+    orig_push = chess.Board.push
+
+    def faulty_push(board_self, move):
+        caller = sys._getframe(1).f_code.co_name
+        if caller == "extract_samples":
+            raise RuntimeError("Simulated unexpected runtime error")
+        return orig_push(board_self, move)
+
+    monkeypatch.setattr(chess.Board, "push", faulty_push)
+
+    with pytest.raises(RuntimeError, match="Simulated unexpected runtime error"):
+        extract_samples("targetplayer")
+
+

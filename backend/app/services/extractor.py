@@ -94,6 +94,7 @@ def extract_samples(username: str) -> tuple[list[dict[str, Any]], dict[str, int]
             chess.BLACK: black_initial if has_clocks else None,
         }
 
+        game_rows = []
         ply = 0
         node = game
         game_has_target_moves = False
@@ -129,7 +130,7 @@ def extract_samples(username: str) -> tuple[list[dict[str, Any]], dict[str, int]
                         "sample_weight": 1.0,
                         "target_berserk": target_berserk,
                     }
-                    samples.append(row)
+                    game_rows.append(row)
 
                 # Push the move
                 board.push(move)
@@ -159,14 +160,15 @@ def extract_samples(username: str) -> tuple[list[dict[str, Any]], dict[str, int]
                 node = next_node
                 ply += 1
 
-        except ValueError:
-            # Illegal move encountered
+        except (ValueError, AssertionError):
+            # Illegal move encountered: discard partial rows for this game
             drop_stats["illegal_move"] += 1
-            # We already appended the valid samples up to this point; we could keep them or drop them.
-            # Keeping the valid prefix is fine.
             continue
 
         if not game_has_target_moves:
             drop_stats["no_target_moves"] += 1
 
+        samples.extend(game_rows)
+
     return samples, drop_stats
+

@@ -52,7 +52,7 @@ async def test_exact_match_username_black():
     assert total_valid == 1
 
 @pytest.mark.asyncio
-async def test_substring_match_should_fail():
+async def test_substring_of_opponent_name_does_not_cause_false_match():
     """Test that substring matching (the old buggy behavior) is now fixed.
     User 'ann' should NOT match opponent 'joannette' (where 'ann' is a substring but not equal)."""
     target = "ann"
