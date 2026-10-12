@@ -52,22 +52,28 @@ BUCKET_QUOTAS = {
 MAX_TOTAL_SAMPLED = 1200
 
 # Minimum number of valid games required to proceed (after filtering and bucketing)
-MIN_GAMES_REQUIRED = 150
+MIN_GAMES_REQUIRED = 50
 
-# Schema version for saved games
+# Schema versions for saved games and datasets
 SCHEMA_VERSION = "v2"
+SCHEMA_VERSION_V3 = "v3"
 
+# Recency weighting half-life in days (Phase B.2)
+RECENCY_HALF_LIFE_DAYS = 365
 
 
 def model_tier(n_games: int) -> str:
     """
     Determine the model tier based on the number of games sampled.
-    Returns "rejected" if n_games < MIN_GAMES_REQUIRED.
+    Returns "rejected" if n_games < MIN_GAMES_REQUIRED (50).
+    50-149: "base_only"
+    150-799: "standard"
+    >=800: "full"
     """
     if n_games < MIN_GAMES_REQUIRED:
         return "rejected"
-    if n_games < 400:
-        return "small"
+    if n_games < 150:
+        return "base_only"
     if n_games < 800:
         return "standard"
     return "full"

@@ -84,11 +84,10 @@ def test_classify_time_control():
         config.INCLUDED_CATEGORIES = original_cats
 
 def test_config_model_tier():
-    assert config.model_tier(100) == "rejected"
-    assert config.model_tier(149) == "rejected"
-    assert config.model_tier(150) == "small"
-    assert config.model_tier(399) == "small"
-    assert config.model_tier(400) == "standard"
+    assert config.model_tier(49) == "rejected"
+    assert config.model_tier(50) == "base_only"
+    assert config.model_tier(149) == "base_only"
+    assert config.model_tier(150) == "standard"
     assert config.model_tier(799) == "standard"
     assert config.model_tier(800) == "full"
     assert config.model_tier(1200) == "full"

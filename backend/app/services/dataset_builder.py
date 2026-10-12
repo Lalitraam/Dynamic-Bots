@@ -101,6 +101,9 @@ def build_dataset(username: str, retries_used: int = 0) -> dict:
         pa.field('target_berserk', pa.bool_()),
     ])
 
+    # Select existing schema columns explicitly so new columns are dropped
+    df = df[[f.name for f in schema]]
+
     table = pa.Table.from_pandas(df, schema=schema, preserve_index=False)
     
     # 6. Save to Parquet

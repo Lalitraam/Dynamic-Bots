@@ -24,7 +24,7 @@ def clean_job_states():
     _ingest_jobs.clear()
 
 
-def _setup_ingested_user(tmp_path, username="test_trainer", model_tier="small"):
+def _setup_ingested_user(tmp_path, username="test_trainer", model_tier="standard"):
     pdir = player_dir(username, create=True)
     info_path = pdir / "info.json"
     with open(info_path, "w", encoding="utf-8") as f:
@@ -92,7 +92,7 @@ def test_train_success_and_completed_payload(tmp_path, monkeypatch):
         "epochs_run": 10,
         "best_val_loss": 3.1415,
         "device": "cpu",
-        "model_tier": "small",
+        "model_tier": "standard",
         "created_at": "2026-10-09T00:00:00Z",
     }
 
@@ -109,7 +109,7 @@ def test_train_success_and_completed_payload(tmp_path, monkeypatch):
     assert data["epochs_run"] == 10
     assert data["best_val_loss"] == 3.1415
     assert data["device"] == "cpu"
-    assert data["model_tier"] == "small"
+    assert data["model_tier"] == "standard"
     assert data["created_at"] == "2026-10-09T00:00:00Z"
 
 
@@ -141,7 +141,7 @@ def test_train_status_disk_fallback_and_not_trained(tmp_path, monkeypatch):
             "epochs_run": 8,
             "best_val_loss": 2.718,
             "device": "cuda",
-            "model_tier": "small",
+            "model_tier": "standard",
             "created_at": "2026-10-09T00:00:00Z",
         }, f)
 

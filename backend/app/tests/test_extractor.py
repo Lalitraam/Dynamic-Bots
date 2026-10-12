@@ -412,3 +412,417 @@ def test_extract_samples_runtime_error_propagates(mock_storage, monkeypatch):
         extract_samples("targetplayer")
 
 
+def test_extractor_phase_b_columns_300_plus_0():
+    """
+    Phase B.1 test for 300+0 game, target player is White.
+    Expected values hand-computed:
+    - Base seconds: 300, Increment seconds: 0
+    - Move 1 (White, ply 0, e4):
+      * prev_move_1 = None (no prior opponent move)
+      * prev_move_2 = None (no prior target move)
+      * num_legal_moves = 20 (standard opening position)
+      * clock_before_move = 300.0 (base time)
+      * clock_after_move = 300.0 (%clk 0:05:00)
+      * time_spent_s = None (first move of target player)
+      * increment_s = 0, base_s = 300
+      * game_result_for_player = 1.0 (Result 1-0, target is White -> 1.0)
+    - Move 2 (White, ply 2, Nf3):
+      * prev_move_1 = 'e7e5' (Black's move 1)
+      * prev_move_2 = 'e2e4' (White's move 1)
+      * num_legal_moves = 29
+      * clock_before_move = 300.0 (carried from White's move 1)
+      * clock_after_move = 295.0 (%clk 0:04:55)
+      * time_spent_s = 300.0 - 295.0 + 0 = 5.0
+      * increment_s = 0, base_s = 300
+      * game_result_for_player = 1.0
+    """
+    from datetime import datetime, timezone
+    pgn = (
+        '[Event "Test 300+0"]\n'
+        '[White "TargetPlayer"]\n'
+        '[Black "Opponent"]\n'
+        '[Result "1-0"]\n'
+        '[TimeControl "300+0"]\n'
+        '\n'
+        '1. e4 { [%clk 0:05:00] } 1... e5 { [%clk 0:05:00] } '
+        '2. Nf3 { [%clk 0:04:55] } 2... Nc6 { [%clk 0:04:58] } 1-0\n'
+    )
+    game_record = [{
+        "game_id": "game_300_0",
+        "pgn": pgn,
+        "player_color": "white",
+        "time_control": "300+0",
+        "date": datetime(2025, 6, 1, 12, 0, tzinfo=timezone.utc),
+        "category": "blitz",
+        "is_fast": False,
+        "rating": 1800,
+        "opponent_rating": 1750,
+        "termination": "Normal",
+    }]
+    with patch("app.services.extractor.storage.load_games", return_value=game_record):
+        samples, drop_stats = extract_samples("targetplayer")
+
+    assert drop_stats["unparseable_pgn"] == 0
+    assert len(samples) == 2
+
+    # Move 1
+    m1 = samples[0]
+    assert m1["ply"] == 0
+    assert m1["uci"] == "e2e4"
+    assert m1["prev_move_1"] is None
+    assert m1["prev_move_2"] is None
+    assert m1["num_legal_moves"] == 20
+    assert m1["clock_before_move"] == 300.0
+    assert m1["clock_after_move"] == 300.0
+    assert m1["time_spent_s"] is None
+    assert m1["increment_s"] == 0
+    assert m1["base_s"] == 300
+    assert m1["created_at_ms"] == int(datetime(2025, 6, 1, 12, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    assert m1["game_result_for_player"] == 1.0
+
+    # Move 2
+    m2 = samples[1]
+    assert m2["ply"] == 2
+    assert m2["uci"] == "g1f3"
+    assert m2["prev_move_1"] == "e7e5"
+    assert m2["prev_move_2"] == "e2e4"
+    assert m2["clock_before_move"] == 300.0
+    assert m2["clock_after_move"] == 295.0
+    assert m2["time_spent_s"] == 5.0
+    assert m2["increment_s"] == 0
+    assert m2["base_s"] == 300
+    assert m2["game_result_for_player"] == 1.0
+
+
+def test_extractor_phase_b_columns_180_plus_2():
+    """
+    Phase B.1 test for 180+2 game, target player is White.
+    Expected values hand-computed:
+    - Base seconds: 180, Increment seconds: 2
+    - Move 1 (White, ply 0, e4):
+      * clock_before_move = 180.0
+      * clock_after_move = 180.0 (%clk 0:03:00)
+      * time_spent_s = None (first move)
+      * increment_s = 2, base_s = 180
+      * game_result_for_player = 0.0 (Result 0-1, target White -> 0.0)
+    - Move 2 (White, ply 2, Nf3):
+      * clock_before_move = 180.0
+      * clock_after_move = 177.0 (%clk 0:02:57)
+      * time_spent_s = 180.0 - 177.0 + 2 = 5.0 (clamped >= 0)
+      * increment_s = 2, base_s = 180
+      * game_result_for_player = 0.0
+    """
+    from datetime import datetime, timezone
+    pgn = (
+        '[Event "Test 180+2"]\n'
+        '[White "TargetPlayer"]\n'
+        '[Black "Opponent"]\n'
+        '[Result "0-1"]\n'
+        '[TimeControl "180+2"]\n'
+        '\n'
+        '1. e4 { [%clk 0:03:00] } 1... e5 { [%clk 0:03:00] } '
+        '2. Nf3 { [%clk 0:02:57] } 2... Nc6 { [%clk 0:02:59] } 0-1\n'
+    )
+    game_record = [{
+        "game_id": "game_180_2",
+        "pgn": pgn,
+        "player_color": "white",
+        "time_control": "180+2",
+        "date": datetime(2025, 6, 2, 12, 0, tzinfo=timezone.utc),
+        "category": "blitz",
+        "is_fast": False,
+        "rating": 1800,
+        "opponent_rating": 1850,
+        "termination": "Normal",
+    }]
+    with patch("app.services.extractor.storage.load_games", return_value=game_record):
+        samples, drop_stats = extract_samples("targetplayer")
+
+    assert len(samples) == 2
+    m1, m2 = samples[0], samples[1]
+    assert m1["time_spent_s"] is None
+    assert m1["increment_s"] == 2
+    assert m1["base_s"] == 180
+    assert m1["game_result_for_player"] == 0.0
+
+    assert m2["clock_before_move"] == 180.0
+    assert m2["clock_after_move"] == 177.0
+    assert m2["time_spent_s"] == 5.0  # 180.0 - 177.0 + 2 = 5.0
+    assert m2["increment_s"] == 2
+    assert m2["base_s"] == 180
+    assert m2["game_result_for_player"] == 0.0
+
+
+def test_extractor_phase_b_white_berserk_180_plus_2():
+    """
+    Test 3 (a): White berserk in 180+2.
+    Moves: "1. e4 {[%clk 0:01:30]} e5 {[%clk 0:03:00]} 2. Nf3 {[%clk 0:01:28]} Nc6 {[%clk 0:03:00]} *"
+    Hand-computed expected values:
+    - Base = 180s, Berserk base = 180 / 2 = 90.0s.
+    - Berserk removes increment, so effective_increment = 0 (even though increment_s = 2 in header).
+    - Move 1 (e4): first move -> time_spent_s = None. clock_after = 90.0.
+    - Move 2 (Nf3): clock_before = 90.0, clock_after = 88.0.
+      time_spent_s = max(0, 90.0 - 88.0 + 0) = 2.0.
+    Target white rows time_spent_s: [None, 2.0].
+    """
+    from datetime import datetime, timezone
+    pgn = (
+        '[Event "Test Berserk 180+2"]\n'
+        '[White "TargetPlayer"]\n'
+        '[Black "Opponent"]\n'
+        '[Result "*"]\n'
+        '[TimeControl "180+2"]\n'
+        '[WhiteBerserk "true"]\n'
+        '\n'
+        '1. e4 { [%clk 0:01:30] } 1... e5 { [%clk 0:03:00] } '
+        '2. Nf3 { [%clk 0:01:28] } 2... Nc6 { [%clk 0:03:00] } *\n'
+    )
+    game_record = [{
+        "game_id": "game_berserk_180_2",
+        "pgn": pgn,
+        "player_color": "white",
+        "time_control": "180+2",
+        "date": datetime(2025, 6, 3, 12, 0, tzinfo=timezone.utc),
+        "category": "blitz",
+        "is_fast": False,
+        "rating": 1800,
+        "opponent_rating": 1800,
+        "termination": "Normal",
+    }]
+    with patch("app.services.extractor.storage.load_games", return_value=game_record):
+        samples, drop_stats = extract_samples("targetplayer")
+
+    assert len(samples) == 2
+    m1, m2 = samples[0], samples[1]
+    assert m1["target_berserk"] is True
+    assert m1["increment_s"] == 2
+    assert m1["clock_before_move"] == 90.0
+    assert m1["clock_after_move"] == 90.0
+    assert m1["time_spent_s"] is None
+
+    assert m2["target_berserk"] is True
+    assert m2["increment_s"] == 2
+    assert m2["clock_before_move"] == 90.0
+    assert m2["clock_after_move"] == 88.0
+    # Expected: 90 - 88 + 0 = 2.0 (effective_increment = 0)
+    assert m2["time_spent_s"] == 2.0
+
+
+def test_extractor_phase_b_non_berserk_180_plus_2():
+    """
+    Test 3 (b): Same moves, NOT berserk, TC 180+2.
+    Moves: "1. e4 {[%clk 0:03:00]} e5 {[%clk 0:03:00]} 2. Nf3 {[%clk 0:03:01]} Nc6 {[%clk 0:03:00]} *"
+    Hand-computed expected values:
+    - Base = 180s, increment = 2s.
+    - Move 1 (e4): first move -> time_spent_s = None. clock_after = 180.0.
+    - Move 2 (Nf3): clock_before = 180.0, clock_after = 181.0.
+      time_spent_s = max(0, 180.0 - 181.0 + 2) = 1.0.
+    Target white rows time_spent_s: [None, 1.0].
+    """
+    from datetime import datetime, timezone
+    pgn = (
+        '[Event "Test Non-Berserk 180+2"]\n'
+        '[White "TargetPlayer"]\n'
+        '[Black "Opponent"]\n'
+        '[Result "*"]\n'
+        '[TimeControl "180+2"]\n'
+        '\n'
+        '1. e4 { [%clk 0:03:00] } 1... e5 { [%clk 0:03:00] } '
+        '2. Nf3 { [%clk 0:03:01] } 2... Nc6 { [%clk 0:03:00] } *\n'
+    )
+    game_record = [{
+        "game_id": "game_non_berserk_180_2",
+        "pgn": pgn,
+        "player_color": "white",
+        "time_control": "180+2",
+        "date": datetime(2025, 6, 3, 12, 0, tzinfo=timezone.utc),
+        "category": "blitz",
+        "is_fast": False,
+        "rating": 1800,
+        "opponent_rating": 1800,
+        "termination": "Normal",
+    }]
+    with patch("app.services.extractor.storage.load_games", return_value=game_record):
+        samples, drop_stats = extract_samples("targetplayer")
+
+    assert len(samples) == 2
+    m1, m2 = samples[0], samples[1]
+    assert m1["target_berserk"] is False
+    assert m1["clock_before_move"] == 180.0
+    assert m1["clock_after_move"] == 180.0
+    assert m1["time_spent_s"] is None
+
+    assert m2["target_berserk"] is False
+    assert m2["clock_before_move"] == 180.0
+    assert m2["clock_after_move"] == 181.0
+    assert m2["time_spent_s"] == 1.0
+
+
+def test_extractor_phase_b_missing_clock_stale_before_180_plus_0():
+    """
+    Test 3 (c): Missing %clk, white 180+0.
+    PGN: "1. e4 {[%clk 0:03:00]} e5 {[%clk 0:03:00]} 2. Nf3 Nc6 3. Bc4 {[%clk 0:02:50]} Bc5 {[%clk 0:02:55]} 4. d3 {[%clk 0:02:48]} Nf6 {[%clk 0:02:50]} *"
+    (Nf3 and Nc6 have no %clk).
+    Expected white time_spent_s per row:
+    - e4: None (first move)
+    - Nf3: None (clock_after missing)
+    - Bc4: None (stale before, because previous move Nf3 had no %clk)
+    - d3: 2.0 (170 - 168 = 2.0; previous move Bc4 had %clk 0:02:50 = 170s, current move d3 has %clk 0:02:48 = 168s).
+    Also assert clock_before_move values are unchanged from existing carry-forward behaviour:
+    - e4: 180.0
+    - Nf3: 180.0
+    - Bc4: 180.0
+    - d3: 170.0
+    """
+    from datetime import datetime, timezone
+    pgn = (
+        '[Event "Test Missing Clock Stale"]\n'
+        '[White "TargetPlayer"]\n'
+        '[Black "Opponent"]\n'
+        '[Result "*"]\n'
+        '[TimeControl "180+0"]\n'
+        '\n'
+        '1. e4 { [%clk 0:03:00] } 1... e5 { [%clk 0:03:00] } '
+        '2. Nf3 2... Nc6 '
+        '3. Bc4 { [%clk 0:02:50] } 3... Bc5 { [%clk 0:02:55] } '
+        '4. d3 { [%clk 0:02:48] } 4... Nf6 { [%clk 0:02:50] } *\n'
+    )
+    game_record = [{
+        "game_id": "game_missing_stale_180_0",
+        "pgn": pgn,
+        "player_color": "white",
+        "time_control": "180+0",
+        "date": datetime(2025, 6, 4, 12, 0, tzinfo=timezone.utc),
+        "category": "blitz",
+        "is_fast": False,
+        "rating": 1800,
+        "opponent_rating": 1800,
+        "termination": "Normal",
+    }]
+    with patch("app.services.extractor.storage.load_games", return_value=game_record):
+        samples, drop_stats = extract_samples("targetplayer")
+
+    assert len(samples) == 4
+    m1, m2, m3, m4 = samples
+
+    # clock_before_move carry-forward assertions
+    assert m1["clock_before_move"] == 180.0
+    assert m2["clock_before_move"] == 180.0
+    assert m3["clock_before_move"] == 180.0
+    assert m4["clock_before_move"] == 170.0
+
+    # time_spent_s assertions
+    assert m1["time_spent_s"] is None
+    assert m2["time_spent_s"] is None
+    assert m3["time_spent_s"] is None
+    assert m4["time_spent_s"] == 2.0
+
+
+def test_extractor_phase_b_prev_move_sequence_and_legal_moves():
+    """
+    Phase B.1 test:
+    Verify prev_move_1, prev_move_2, and num_legal_moves on '1. e4 e5 2. Nf3 Nc6'.
+    Hand-computed expected values:
+    - Target = White:
+      * 1st White move (ply 0, e4): prev_move_1 = None, prev_move_2 = None, num_legal_moves = 20
+      * 2nd White move (ply 2, Nf3): prev_move_1 = 'e7e5', prev_move_2 = 'e2e4'
+    - Target = Black:
+      * 1st Black move (ply 1, e5): prev_move_1 = 'e2e4', prev_move_2 = None, num_legal_moves = 20
+      * 2nd Black move (ply 3, Nc6): prev_move_1 = 'g1f3', prev_move_2 = 'e7e5'
+    """
+    from datetime import datetime, timezone
+    pgn = (
+        '[Event "Sequence Test"]\n'
+        '[White "WhitePlayer"]\n'
+        '[Black "BlackPlayer"]\n'
+        '[Result "1/2-1/2"]\n'
+        '[TimeControl "300+0"]\n'
+        '\n'
+        '1. e4 { [%clk 0:05:00] } 1... e5 { [%clk 0:05:00] } '
+        '2. Nf3 { [%clk 0:04:55] } 2... Nc6 { [%clk 0:04:58] } 1/2-1/2\n'
+    )
+
+    # 1. White target
+    game_white = [{
+        "game_id": "game_seq_w",
+        "pgn": pgn,
+        "player_color": "white",
+        "time_control": "300+0",
+        "date": datetime(2025, 6, 5, 12, 0, tzinfo=timezone.utc),
+        "category": "blitz",
+        "is_fast": False,
+        "rating": 1800,
+        "opponent_rating": 1800,
+        "termination": "Normal",
+    }]
+    with patch("app.services.extractor.storage.load_games", return_value=game_white):
+        samples_w, _ = extract_samples("whiteplayer")
+
+    assert len(samples_w) == 2
+    assert samples_w[0]["ply"] == 0
+    assert samples_w[0]["prev_move_1"] is None
+    assert samples_w[0]["prev_move_2"] is None
+    assert samples_w[0]["num_legal_moves"] == 20
+
+    assert samples_w[1]["ply"] == 2
+    assert samples_w[1]["prev_move_1"] == "e7e5"
+    assert samples_w[1]["prev_move_2"] == "e2e4"
+
+    # 2. Black target
+    game_black = [{
+        "game_id": "game_seq_b",
+        "pgn": pgn,
+        "player_color": "black",
+        "time_control": "300+0",
+        "date": datetime(2025, 6, 5, 12, 0, tzinfo=timezone.utc),
+        "category": "blitz",
+        "is_fast": False,
+        "rating": 1800,
+        "opponent_rating": 1800,
+        "termination": "Normal",
+    }]
+    with patch("app.services.extractor.storage.load_games", return_value=game_black):
+        samples_b, _ = extract_samples("blackplayer")
+
+    assert len(samples_b) == 2
+    assert samples_b[0]["ply"] == 1
+    assert samples_b[0]["prev_move_1"] == "e2e4"
+    assert samples_b[0]["prev_move_2"] is None
+    assert samples_b[0]["num_legal_moves"] == 20
+
+    assert samples_b[1]["ply"] == 3
+    assert samples_b[1]["prev_move_1"] == "g1f3"
+    assert samples_b[1]["prev_move_2"] == "e7e5"
+
+
+def test_extractor_phase_b_game_result_for_player_all():
+    """
+    Phase B.1 test:
+    Hand-computed mapping:
+    - Result 1-0: White target -> 1.0; Black target -> 0.0
+    - Result 0-1: White target -> 0.0; Black target -> 1.0
+    - Result 1/2-1/2: White target -> 0.5; Black target -> 0.5
+    """
+    from datetime import datetime, timezone
+
+    for result, exp_w, exp_b in [("1-0", 1.0, 0.0), ("0-1", 0.0, 1.0), ("1/2-1/2", 0.5, 0.5)]:
+        pgn = f'[Event "T"]\n[White "W"]\n[Black "B"]\n[Result "{result}"]\n[TimeControl "300+0"]\n\n1. e4 e5 {result}\n'
+        gw = [{
+            "game_id": f"gw_{result}", "pgn": pgn, "player_color": "white",
+            "time_control": "300+0", "date": datetime(2025, 6, 6, tzinfo=timezone.utc),
+            "category": "blitz", "is_fast": False, "rating": 1500, "opponent_rating": 1500, "termination": "Normal"
+        }]
+        gb = [{
+            "game_id": f"gb_{result}", "pgn": pgn, "player_color": "black",
+            "time_control": "300+0", "date": datetime(2025, 6, 6, tzinfo=timezone.utc),
+            "category": "blitz", "is_fast": False, "rating": 1500, "opponent_rating": 1500, "termination": "Normal"
+        }]
+        with patch("app.services.extractor.storage.load_games", return_value=gw):
+            sw, _ = extract_samples("w")
+            assert sw[0]["game_result_for_player"] == exp_w
+
+        with patch("app.services.extractor.storage.load_games", return_value=gb):
+            sb, _ = extract_samples("b")
+            assert sb[0]["game_result_for_player"] == exp_b
+
+

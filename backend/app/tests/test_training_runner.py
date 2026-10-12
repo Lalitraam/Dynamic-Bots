@@ -63,11 +63,11 @@ def test_train_player_model_smoke(tmp_path):
             info = build_dataset("testuser")
             assert info["total_samples"] > 0
 
-        # Update info.json to have model_tier = "small" since fixture has < 150 games
+        # Update info.json to have model_tier = "standard" since fixture has < 150 games
         info_path = tmp_path / "players" / "testuser" / "info.json"
         with open(info_path, "r", encoding="utf-8") as f:
             player_info = json.load(f)
-        player_info["model_tier"] = "small"
+        player_info["model_tier"] = "standard"
         with open(info_path, "w", encoding="utf-8") as f:
             json.dump(player_info, f, indent=2)
 

@@ -326,7 +326,7 @@ def test_status_disk_fallback_incomplete_vs_completed(tmp_path, monkeypatch):
 
     # 2. info.json exists -> status should be 'completed'
     with open(pdir / "info.json", "w", encoding="utf-8") as f:
-        json.dump({"total_samples": 400, "model_tier": "small"}, f)
+        json.dump({"total_samples": 400, "model_tier": "standard"}, f)
 
     resp = client.get(f"/api/status/{user}")
     assert resp.status_code == 200

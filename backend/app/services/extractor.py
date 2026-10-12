@@ -6,6 +6,7 @@ Replays the PGN and extracts one sample row before every move made by the target
 """
 
 import io
+from datetime import datetime, timezone
 import chess
 import chess.pgn
 from typing import Any
@@ -55,14 +56,26 @@ def extract_samples(username: str) -> tuple[list[dict[str, Any]], dict[str, int]
             drop_stats["unparseable_pgn"] += 1
             continue
 
-        # Get base time for clock logic
+        # Get base time and increment for clock logic
         tc_raw = record["time_control"]
         parsed_tc = classifier.parse_time_control(tc_raw)
         if parsed_tc is None:
             # Should have been dropped in Milestone 1, but be safe
             base_seconds = 0.0
+            base_s = 0
+            increment_s = 0
         else:
             base_seconds = float(parsed_tc[0])
+            base_s = int(parsed_tc[0])
+            increment_s = int(parsed_tc[1])
+
+        # Game UTC timestamp in ms
+        dt = record["date"]
+        if isinstance(dt, str):
+            dt = datetime.fromisoformat(dt)
+        if hasattr(dt, "tzinfo") and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        created_at_ms = int(dt.timestamp() * 1000)
 
         board = game.board()
         
@@ -71,6 +84,17 @@ def extract_samples(username: str) -> tuple[list[dict[str, Any]], dict[str, int]
         white_berserk = (headers.get("WhiteBerserk", "").strip().lower() == "true")
         black_berserk = (headers.get("BlackBerserk", "").strip().lower() == "true")
         target_berserk = white_berserk if is_player_white else black_berserk
+
+        # Game result for target player (1.0 win, 0.5 draw, 0.0 loss)
+        result_header = headers.get("Result", "")
+        if result_header == "1-0":
+            game_result_for_player = 1.0 if is_player_white else 0.0
+        elif result_header == "0-1":
+            game_result_for_player = 0.0 if is_player_white else 1.0
+        elif result_header == "1/2-1/2":
+            game_result_for_player = 0.5
+        else:
+            game_result_for_player = 0.5
 
         # If a player berserked, their initial clock is base_seconds / 2 (opponent berserk does not change target clock)
         white_initial = (base_seconds / 2.0) if white_berserk else base_seconds
@@ -98,6 +122,9 @@ def extract_samples(username: str) -> tuple[list[dict[str, Any]], dict[str, int]
         ply = 0
         node = game
         game_has_target_moves = False
+        moves_history = []
+        target_moves_count = 0
+        target_prev_move_had_clk = False
 
         try:
             while node.variations:
@@ -111,6 +138,36 @@ def extract_samples(username: str) -> tuple[list[dict[str, Any]], dict[str, int]
                 if is_target_turn:
                     game_has_target_moves = True
                     clock_before_move = last_clock[board.turn]
+
+                    prev_move_1 = moves_history[-1] if len(moves_history) >= 1 else None
+                    prev_move_2 = moves_history[-2] if len(moves_history) >= 2 else None
+                    num_legal_moves = board.legal_moves.count()
+
+                    node_clock = next_node.clock()
+                    clock_after_move = float(node_clock) if node_clock is not None else None
+
+                    # Rule for time_spent_s:
+                    # 1. Berserk increment: When target berserks, increment is removed.
+                    #    Evidence: 0 of 5777 own-move transitions had d < 0 in header-berserk games
+                    #    with increment; 3059 of 7603 in non-berserk games.
+                    #    effective_increment = 0 if target_berserk else increment_s.
+                    # 2. Stale clock: If the target's previous move lacked a %clk tag,
+                    #    clock_before_move is a carried-forward estimate, so time_spent_s cannot be
+                    #    accurately computed and must be None. clock_before_move itself retains its
+                    #    carry-forward behaviour unchanged.
+                    # 3. First move: null (no elapsed time / increment applied prior to move 1).
+                    # 4. Missing %clk: null (if clock_after_move is None or clock_before_move is None).
+                    effective_increment = 0 if target_berserk else increment_s
+
+                    if target_moves_count == 0:
+                        time_spent_s = None
+                    elif (not target_prev_move_had_clk) or clock_before_move is None or clock_after_move is None:
+                        time_spent_s = None
+                    else:
+                        time_spent_s = max(0.0, float(clock_before_move - clock_after_move + effective_increment))
+
+                    target_prev_move_had_clk = (node_clock is not None)
+                    target_moves_count += 1
                     
                     row = {
                         "game_id": game_id,
@@ -129,11 +186,21 @@ def extract_samples(username: str) -> tuple[list[dict[str, Any]], dict[str, int]
                         "halfmove_clock": board.halfmove_clock,
                         "sample_weight": 1.0,
                         "target_berserk": target_berserk,
+                        "prev_move_1": prev_move_1,
+                        "prev_move_2": prev_move_2,
+                        "clock_after_move": clock_after_move,
+                        "time_spent_s": time_spent_s,
+                        "increment_s": increment_s,
+                        "base_s": base_s,
+                        "created_at_ms": created_at_ms,
+                        "game_result_for_player": game_result_for_player,
+                        "num_legal_moves": num_legal_moves,
                     }
                     game_rows.append(row)
 
                 # Push the move
                 board.push(move)
+                moves_history.append(move.uci())
                 
                 # Update the clock for the player who just moved
                 # Use the clock attached to the node we just entered

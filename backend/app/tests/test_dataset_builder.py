@@ -177,3 +177,27 @@ def test_dataset_report_renders_zero_counts_and_ingestion_section(tmp_path):
         config_module.DATA_ROOT = orig_data_root
 
 
+def test_v2_parquet_byte_identity(tmp_path):
+    """Assert v2 samples.parquet generated from sample_games.jsonl is bitwise identical
+    to the pre-edit baseline SHA256: 8540e76b6874ae0e7de7400a69232386276310453c68ea40d04ce908dbc4e273.
+    """
+    import hashlib
+    import app.config as config_module
+    from app.services.storage import player_dir
+
+    orig_data_root = config_module.DATA_ROOT
+    config_module.DATA_ROOT = tmp_path
+    username = "v2_identity_user"
+    games = load_fixture_games()
+    try:
+        with patch("app.services.extractor.storage.load_games", return_value=games):
+            build_dataset(username)
+        parquet_path = player_dir(username) / "samples.parquet"
+        assert parquet_path.exists()
+        file_bytes = parquet_path.read_bytes()
+        file_hash = hashlib.sha256(file_bytes).hexdigest()
+        assert file_hash == "8540e76b6874ae0e7de7400a69232386276310453c68ea40d04ce908dbc4e273"
+    finally:
+        config_module.DATA_ROOT = orig_data_root
+
+
