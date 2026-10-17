@@ -1,5 +1,6 @@
 """Unit tests for V3Provider pattern-conditioned error model integration (Phase P)."""
 
+import math
 from unittest.mock import MagicMock, patch
 import chess
 import numpy as np
@@ -36,6 +37,7 @@ def _make_dummy_provider(error_model=None, temperature=1.0, stockfish_analyser=N
         error_model=error_model,
         stockfish_analyser=stockfish_analyser,
     )
+    provider.temperature = float(temperature)
     return provider
 
 
@@ -44,6 +46,7 @@ def test_provider_error_model_prob_and_temperature_branches():
     mock_em.predict.return_value = np.array([0.5])
 
     provider = _make_dummy_provider(error_model=mock_em, temperature=1.0)
+    t_base = provider.temperature
 
     board = chess.Board()
     ctx = MoveContext(
@@ -58,7 +61,7 @@ def test_provider_error_model_prob_and_temperature_branches():
         ply=0,
     )
 
-    # 1. Test error branch: u = 0.2 < p_err = 0.5 -> eff_temp = 2.0 (flattens distribution)
+    # 1. Test error branch: u = 0.2 < p_err = 0.5 -> eff_temp = 1.1 * t_base
     rng_error = MagicMock()
     rng_error.random.return_value = 0.2
     rng_error.choices = random.Random(42).choices
@@ -67,7 +70,7 @@ def test_provider_error_model_prob_and_temperature_branches():
     assert dec_err.p_err == 0.5
     top5_err = dict(dec_err.top5)
 
-    # 2. Test clean branch: u = 0.8 >= p_err = 0.5 -> eff_temp = 1.0 (sharper distribution)
+    # 2. Test clean branch: u = 0.8 >= p_err = 0.5 -> eff_temp = t_base
     rng_clean = MagicMock()
     rng_clean.random.return_value = 0.8
     rng_clean.choices = random.Random(42).choices
@@ -76,11 +79,17 @@ def test_provider_error_model_prob_and_temperature_branches():
     assert dec_clean.p_err == 0.5
     top5_clean = dict(dec_clean.top5)
 
-    # Under T=2.0 (error branch), probability of top-1 move should be lower than under T=1.0
+    # Under error branch, eff_temp is strictly 1.1 * t_base
+    clean_log_ratio = math.log(top5_clean["e2e4"]) - math.log(top5_clean["d2d4"])
+    err_log_ratio = math.log(top5_err["e2e4"]) - math.log(top5_err["d2d4"])
+    eff_temp_measured = clean_log_ratio * t_base / err_log_ratio
+    assert eff_temp_measured == pytest.approx(1.1 * t_base, rel=1e-3)
+
+    # Under error branch, probability of top-1 move should be lower than under clean branch
     top_move = dec_clean.top5[0][0]
     p_clean_top = top5_clean[top_move]
     p_err_top = top5_err[top_move]
-    assert p_err_top < p_clean_top, "Error branch temperature (2.0) must flatten the distribution"
+    assert p_err_top < p_clean_top, "Error branch temperature (1.1 * t_base) must flatten the distribution"
 
 
 def test_provider_blunder_capping_resamples():

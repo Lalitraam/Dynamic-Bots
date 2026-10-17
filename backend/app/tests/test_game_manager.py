@@ -219,3 +219,10 @@ def test_websocket_flow(monkeypatch: pytest.MonkeyPatch):
         assert snap3["status"] == "completed"
         assert snap3["result"] == "0-1"
         assert snap3["termination"] == "resignation"
+
+
+def test_think_time_model_default_init():
+    from app.engine.think_time import ThinkTimeModel
+    t = ThinkTimeModel()
+    assert t.buckets == {}
+
