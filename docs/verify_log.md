@@ -60,3 +60,46 @@
   - When the target player's previous move lacked a `%clk` annotation, `clock_before_move` is carried forward from an earlier turn as an estimate.
   - While `clock_before_move` retains its carry-forward behavior for state representation, elapsed time cannot be measured across missing clock plies.
   - Therefore, if the target's previous move lacked a `%clk`, `time_spent_s` for the current move is set to `None`.
+
+#### 6. Step 2 Empirical Verification Summary (the_king_crusher)
+- **Step 2c (Clock transitions in increment games):**
+  - Header-berserk games with increment > 0: transitions with d < 0: 0 / 5777
+  - Non-berserk games with increment > 0: transitions with d < 0: 3059 / 7603
+- **Step 2e (Header-berserk initial clock halving):**
+  - Header-berserk games total: 471
+  - Header-berserk games with first %clk == base/2: 471
+
+
+## 2026-10-12 — Lichess DB verification (C0)
+
+1. **Licence of the standard games database:**
+   - Licence: Creative Commons CC0 1.0 Universal (Public Domain Dedication). Training, commercial use, modification, and redistribution are permitted without restrictions or prior consent.
+   - Sources: [https://database.lichess.org](https://database.lichess.org), [https://tldrlegal.com/license/creative-commons-cc0-1.0-universal](https://tldrlegal.com/license/creative-commons-cc0-1.0-universal)
+
+2. **File format and required decompression tool:**
+   - Format: `.pgn.zst` (Zstandard compressed PGN text archives).
+   - Decompression tools: `zstd` command-line utility (`zstd -d ...`) or Python `zstandard` streaming library (`zstandard.ZstdDecompressor().stream_reader(...)`).
+   - Source: [https://database.lichess.org](https://database.lichess.org)
+
+3. **Presence of `%clk` comments in published PGNs:**
+   - Verified present. Standard rated database PGN moves contain move clock annotations formatted as `{ [%clk H:MM:SS] }` indicating remaining time on the player's clock after making each move.
+   - Source: [https://database.lichess.org](https://database.lichess.org)
+
+4. **Presence of `WhiteBerserk` / `BlackBerserk` headers:**
+   - Verified present. Arena tournament games where a player berserked include explicit PGN tag pairs: `[WhiteBerserk "1"]` (or `"true"`) and `[BlackBerserk "1"]` (or `"true"`).
+   - Source: [https://database.lichess.org](https://database.lichess.org)
+
+5. **Approximate monthly file size (GB):**
+   - For recent months (2025/2026), the compressed `.pgn.zst` dump size is approximately 28 to 30 GB per month (~90 to 100 million games per month).
+   - Source: [https://database.lichess.org](https://database.lichess.org)
+
+6. **Lichess API terms-of-use URL and date accessed:**
+   - Terms URLs: [https://lichess.org/terms-of-service](https://lichess.org/terms-of-service) and API guidelines at [https://lichess.org/api](https://lichess.org/api).
+   - Date accessed: 2026-10-12.
+
+## 2026-10-17 — downloader.py helper function
+`download_player_games(username)` was added during Phase D multi-player ingest.
+It wraps `_run_ingest` from routers.ingest and returns the in-memory `_jobs`
+status dict. Status: kept. Architectural debt noted for Phase G (jobs move
+to SQLite; services -> routers layering is backwards).
+

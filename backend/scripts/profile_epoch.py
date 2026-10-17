@@ -273,16 +273,105 @@ def check_batchnorm_staleness(username: str = "the_king_crusher", device_str: st
     }
 
 
+def run_cached_fetch_benchmark(username: str = "the_king_crusher", target_batches: int = 200) -> dict:
+    """
+    Profile data fetch: time next(iterator) for on-the-fly PlayerMoveDataset
+    AND for CachedDataset in the same run for target_batches batches.
+    """
+    from app.ml.dataset_v3 import CachedDataset
+    from app.ml.tensor_cache import build_cache, cache_is_valid
+
+    p_dir = storage.player_dir(username, create=False)
+    samples_path = p_dir / "samples.parquet"
+    if not samples_path.exists():
+        raise FileNotFoundError(f"samples.parquet not found for '{username}' in {p_dir}")
+
+    cache_dir = p_dir / "cache_v3"
+    parquet_v3_path = p_dir / "samples_v3.parquet"
+    if not parquet_v3_path.exists():
+        raise FileNotFoundError(f"samples_v3.parquet not found for '{username}' in {p_dir}")
+
+    is_valid, reason = cache_is_valid(cache_dir, parquet_v3_path)
+    if not is_valid:
+        print(f"Building cache_v3 for '{username}' (reason: {reason})...")
+        build_cache(username)
+
+    print("=" * 70)
+    print(f"BENCHMARK: DATA FETCH PROFILING FOR '{username}' ({target_batches} batches, batch_size={config.TRAIN_BATCH_SIZE})")
+    print("=" * 70)
+
+    # 1. On-the-fly PlayerMoveDataset
+    fly_dataset = PlayerMoveDataset(str(samples_path), split="train")
+    fly_loader = DataLoader(
+        fly_dataset,
+        batch_size=config.TRAIN_BATCH_SIZE,
+        shuffle=True,
+        num_workers=0,
+    )
+    actual_batches = min(target_batches, len(fly_loader))
+
+    fly_iter = iter(fly_loader)
+    fly_times: list[float] = []
+    for _ in range(actual_batches):
+        t0 = time.perf_counter()
+        _ = next(fly_iter)
+        t1 = time.perf_counter()
+        fly_times.append(t1 - t0)
+
+    mean_fly = sum(fly_times) / len(fly_times)
+    total_fly = sum(fly_times)
+
+    # 2. CachedDataset
+    cached_dataset = CachedDataset(cache_dir, split="train")
+    cached_loader = DataLoader(
+        cached_dataset,
+        batch_size=config.TRAIN_BATCH_SIZE,
+        shuffle=True,
+        num_workers=0,
+    )
+    actual_cached_batches = min(target_batches, len(cached_loader))
+
+    cached_iter = iter(cached_loader)
+    cached_times: list[float] = []
+    for _ in range(actual_cached_batches):
+        t0 = time.perf_counter()
+        _ = next(cached_iter)
+        t1 = time.perf_counter()
+        cached_times.append(t1 - t0)
+
+    mean_cached = sum(cached_times) / len(cached_times)
+    total_cached = sum(cached_times)
+
+    speedup = mean_fly / mean_cached if mean_cached > 0 else 0.0
+
+    print(f"{'Dataset':<35} | {'Mean (s/batch)':<16} | {'Total Time (s)':<16}")
+    print("-" * 73)
+    print(f"{'On-the-fly (PlayerMoveDataset)':<35} | {mean_fly:<16.6f} | {total_fly:<16.4f}")
+    print(f"{'Cached (CachedDataset mmap)':<35} | {mean_cached:<16.6f} | {total_cached:<16.4f}")
+    print("-" * 73)
+    print(f"Speed-up ratio: {speedup:.2f}x faster")
+    print("=" * 70)
+
+    return {
+        "mean_fly_sec": mean_fly,
+        "mean_cached_sec": mean_cached,
+        "speedup": speedup,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Profile epoch training operations & check BatchNorm staleness.")
     parser.add_argument("username", nargs="?", default="the_king_crusher", help="Player username")
     parser.add_argument("--profile-only", action="store_true", help="Only run Step 3 profiling")
     parser.add_argument("--bn-check-only", action="store_true", help="Only run Step 4 BatchNorm staleness check")
+    parser.add_argument("--cached-fetch-only", action="store_true", help="Profile data fetch only: CachedDataset vs on-the-fly PlayerMoveDataset")
     parser.add_argument("--device", default=None, help="Compute device ('cpu' or 'cuda')")
     parser.add_argument("--batches", type=int, default=200, help="Number of batches to profile for Step 3")
     args = parser.parse_args()
 
-    if args.profile_only:
+    if args.cached_fetch_only:
+        run_cached_fetch_benchmark(args.username, target_batches=args.batches)
+    elif args.profile_only:
         run_profile_epoch(args.username, target_batches=args.batches, device_str=args.device)
     elif args.bn_check_only:
         check_batchnorm_staleness(args.username, device_str=args.device)

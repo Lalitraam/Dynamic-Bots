@@ -4,7 +4,10 @@ from pathlib import Path
 
 def dump():
     repo_root = Path(__file__).resolve().parent
-    out_path = repo_root / "project_structure_and_code.txt"
+    targets = [
+        repo_root / "project_code_and_structure.txt",
+        repo_root / "project_structure_and_code.txt",
+    ]
 
     exclude_dirs = {"venv", ".venv", "__pycache__", ".pytest_cache", ".git", ".gemini", "data"}
 
@@ -41,24 +44,28 @@ def dump():
     tree = build_tree_dict(py_files)
     tree_lines = ["dynamic_bots/"] + format_tree(tree)
 
-    with open(out_path, "w", encoding="utf-8") as out:
-        out.write("Project Structure (.py files only):\n")
-        out.write("===================================\n")
-        out.write("\n".join(tree_lines))
-        out.write("\n\n\nProject Code:\n")
-        out.write("=============\n\n")
+    header = (
+        "Project Structure (.py files only):\n"
+        "===================================\n"
+        + "\n".join(tree_lines)
+        + "\n\n\nProject Code:\n"
+        "=============\n\n"
+    )
 
-        for rel_p in py_files:
-            file_path = repo_root / rel_p
-            out.write("=" * 80 + "\n")
-            out.write(f"FILE: {rel_p.as_posix()}\n")
-            out.write("-" * 40 + "\n")
-            try:
-                with open(file_path, "r", encoding="utf-8") as infile:
-                    out.write(infile.read())
-            except Exception as e:
-                out.write(f"<Error reading file: {e}>\n")
-            out.write("\n\n\n\n")
+    for target in targets:
+        with open(target, "w", encoding="utf-8") as out:
+            out.write(header)
+            for rel_p in py_files:
+                file_path = repo_root / rel_p
+                out.write("=" * 80 + "\n")
+                out.write(f"FILE: {rel_p.as_posix()}\n")
+                out.write("-" * 40 + "\n")
+                try:
+                    with open(file_path, "r", encoding="utf-8") as infile:
+                        out.write(infile.read())
+                except Exception as e:
+                    out.write(f"<Error reading file: {e}>\n")
+                out.write("\n\n\n\n")
 
 
 if __name__ == "__main__":

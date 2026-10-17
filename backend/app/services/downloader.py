@@ -329,3 +329,14 @@ def stream_games(
         bucket=bucket,
         windowed=windowed,
     )
+
+
+def download_player_games(username: str) -> dict:
+    """Download and ingest games for a player using the ingest pipeline."""
+    import asyncio
+    from ..routers.ingest import _run_ingest, _jobs
+    key = username.lower()
+    _jobs[key] = {"status": "queued", "username": key, "progress": 0.0}
+    asyncio.run(_run_ingest(username))
+    return _jobs.get(key, {})
+

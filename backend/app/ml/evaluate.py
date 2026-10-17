@@ -14,13 +14,17 @@ CRITICAL: This module must NOT import PyTorch.
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol, Sequence
 
 import chess
 import numpy as np
+import pyarrow.parquet as pq
 
 from ..services import classifier
+from .tensor_cache import cache_is_valid
 
 
 class Predictor(Protocol):
@@ -384,6 +388,13 @@ def evaluate(
         }
         per_position.append(rec)
 
+    return _aggregate_evaluation(per_position, phase_bins=phase_bins)
+
+
+def _aggregate_evaluation(
+    per_position: list[dict[str, Any]],
+    phase_bins: tuple[int, int] = (20, 60),
+) -> dict[str, Any]:
     n_positions = len(per_position)
     distinct_games = {p["game_id"] for p in per_position}
     n_games = len(distinct_games)
@@ -497,4 +508,189 @@ def evaluate(
     }
 
 
-# TODO: implement evaluate_cached (needs Phase B cache)
+def evaluate_cached(
+    batch_logprob_fn: Callable[[dict[str, np.ndarray]], np.ndarray],
+    cache_dir: Path | str,
+    parquet_path: Path | str,
+    split: str | int,
+    berserk_filter: str = "non_berserk",
+    batch_size: int = 512,
+    phase_bins: tuple[int, int] = (20, 60),
+) -> dict[str, Any]:
+    """
+    Evaluate a batched log-probability predictor on precomputed tensor cache arrays.
+
+    Target move = from*64+to (promotions collapsed: it is a FROM/TO-pair evaluation;
+    the promotion piece distinction is not evaluated here).
+
+    Parameters
+    ----------
+    batch_logprob_fn : Callable[[dict[str, np.ndarray]], np.ndarray]
+        Batch predictor receiving dict(planes=uint8 (B,P,8,8), meta=float32 (B,10),
+        legal_mask=bool (B,4096)) and returning float array (B,4096) of log probabilities.
+    cache_dir : Path | str
+        Path to tensor cache directory containing *.npy and manifest.json.
+    parquet_path : Path | str
+        Path to samples_v3.parquet.
+    split : str | int
+        Split name ('train', 'val', 'test') or code (0, 1, 2).
+    berserk_filter : str
+        Filter mode: 'non_berserk' (default), 'all', or 'berserk'.
+    batch_size : int
+        Maximum batch size for batch_logprob_fn calls (default 512).
+    phase_bins : tuple[int, int]
+        Opening and middlegame ply boundaries (default (20, 60)).
+
+    Returns
+    -------
+    dict[str, Any]
+        Dictionary of aggregate evaluation metrics matching evaluate().
+    """
+    cache_dir = Path(cache_dir)
+    parquet_path = Path(parquet_path)
+
+    valid, reason = cache_is_valid(cache_dir, parquet_path)
+    if not valid:
+        raise ValueError(f"Cache is invalid: {reason}")
+
+    manifest_path = cache_dir / "manifest.json"
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+    manifest_n = manifest.get("n", 0)
+    planes_p = manifest.get("planes", 22)
+
+    table = pq.read_table(
+        parquet_path,
+        columns=["ply", "game_id", "clock_before_move", "base_s", "target_berserk", "split"],
+    )
+    if len(table) != manifest_n:
+        raise ValueError(
+            f"Parquet row count ({len(table)}) does not match manifest n ({manifest_n})"
+        )
+
+    # Load cache arrays via memory-mapping
+    planes_mmap = np.load(cache_dir / "planes.npy", mmap_mode="r")
+    meta_mmap = np.load(cache_dir / "meta.npy", mmap_mode="r")
+    target_mmap = np.load(cache_dir / "target.npy", mmap_mode="r")
+    legal_ptr_mmap = np.load(cache_dir / "legal_ptr.npy", mmap_mode="r")
+    legal_idx_mmap = np.load(cache_dir / "legal_idx.npy", mmap_mode="r")
+    split_mmap = np.load(cache_dir / "split.npy", mmap_mode="r")
+    berserk_mmap = np.load(cache_dir / "berserk.npy", mmap_mode="r")
+
+    split_str_to_code = {"train": 0, "val": 1, "test": 2}
+    if isinstance(split, str):
+        if split not in split_str_to_code:
+            raise ValueError(f"Unknown split name: '{split}'")
+        split_code = split_str_to_code[split]
+    else:
+        split_code = int(split)
+
+    mask = (split_mmap == split_code)
+    if berserk_filter == "all":
+        pass
+    elif berserk_filter == "non_berserk":
+        mask = mask & (berserk_mmap == 0)
+    elif berserk_filter == "berserk":
+        mask = mask & (berserk_mmap == 1)
+    else:
+        raise ValueError(f"Unknown berserk_filter: '{berserk_filter}'")
+
+    selected_indices = np.where(mask)[0]
+
+    p_ply = table.column("ply").to_numpy()
+    p_gid = table.column("game_id").to_pylist()
+    p_cb = table.column("clock_before_move").to_pylist()
+    p_base = table.column("base_s").to_pylist()
+    p_berserk = table.column("target_berserk").to_pylist()
+
+    per_position: list[dict[str, Any]] = []
+    n_selected = len(selected_indices)
+
+    for start_i in range(0, n_selected, batch_size):
+        batch_rows = selected_indices[start_i : start_i + batch_size]
+        b_len = len(batch_rows)
+
+        # 1. Unpack planes
+        packed_planes = planes_mmap[batch_rows]
+        unpacked = np.unpackbits(packed_planes, axis=-1)
+        batch_planes = unpacked[:, : planes_p * 64].reshape(b_len, planes_p, 8, 8).astype(np.uint8)
+
+        # 2. Meta
+        batch_meta = np.array(meta_mmap[batch_rows], dtype=np.float32)
+
+        # 3. Legal mask from CSR
+        batch_legal_mask = np.zeros((b_len, 4096), dtype=bool)
+        batch_legals = []
+        for b, r_idx in enumerate(batch_rows):
+            ptr_start = legal_ptr_mmap[r_idx]
+            ptr_end = legal_ptr_mmap[r_idx + 1]
+            legals = legal_idx_mmap[ptr_start:ptr_end]
+            batch_legal_mask[b, legals] = True
+            batch_legals.append(legals)
+
+        # 4. Call batch_logprob_fn
+        batch_dict = {
+            "planes": batch_planes,
+            "meta": batch_meta,
+            "legal_mask": batch_legal_mask,
+        }
+        log_probs = batch_logprob_fn(batch_dict)
+
+        # 5. Validate & score per position
+        for b, r_idx in enumerate(batch_rows):
+            legals = batch_legals[b]
+            target = int(target_mmap[r_idx])
+
+            if target < 0 or target >= 4096 or not batch_legal_mask[b, target]:
+                raise ValueError(f"True target {target} not in legal slice for row {r_idx}")
+
+            lp_legals = log_probs[b, legals]
+            if not np.all(np.isfinite(lp_legals)):
+                raise ValueError(f"Non-finite log-probs on legal moves for row {r_idx}")
+
+            total_prob = float(np.sum(np.exp(lp_legals)))
+            if abs(total_prob - 1.0) > 1e-4:
+                raise ValueError(
+                    f"Sum of exp(logp) over legal moves is {total_prob:.6f}, expected 1.0 within 1e-4"
+                )
+
+            target_lp = float(log_probs[b, target])
+            diff = lp_legals - target_lp
+
+            g = int(np.sum(diff > 1e-9))
+            e = int(np.sum(np.abs(diff) <= 1e-9))
+            max_prob = float(np.max(np.exp(lp_legals)))
+
+            top1 = float(np.clip((1.0 - g) / e, 0.0, 1.0))
+            top3 = float(np.clip((3.0 - g) / e, 0.0, 1.0))
+            nll = float(-target_lp)
+            rank = float(g + (e + 1.0) / 2.0)
+
+            cb_val = p_cb[r_idx]
+            if cb_val is None or (isinstance(cb_val, float) and math.isnan(cb_val)):
+                clock_before = None
+            else:
+                clock_before = float(cb_val)
+
+            base_val = p_base[r_idx]
+            base_seconds = int(base_val) if (base_val is not None and not (isinstance(base_val, float) and math.isnan(base_val))) else 0
+
+            bsk_val = p_berserk[r_idx]
+            is_berserk = bool(bsk_val) if bsk_val is not None else False
+
+            rec = {
+                "game_id": p_gid[r_idx],
+                "ply": int(p_ply[r_idx]),
+                "top1": top1,
+                "top3": top3,
+                "nll": nll,
+                "rank": rank,
+                "max_prob": max_prob,
+                "clock_before_move": clock_before,
+                "base_seconds": base_seconds,
+                "target_berserk": is_berserk,
+            }
+            per_position.append(rec)
+
+    return _aggregate_evaluation(per_position, phase_bins=phase_bins)
+

@@ -2,6 +2,7 @@
 Configuration constants for the Chess Bot Clone Factory.
 """
 
+import os
 from pathlib import Path
 
 # Data root directory (resolves to the repo-root data/ folder, the parent of backend/)
@@ -85,12 +86,14 @@ def model_tier(n_games: int) -> str:
 
 # Board tensor dimensions
 BOARD_PLANES = 18  # 18×8×8 board representation
+HISTORY_PLANES = True
 
 # Move promotion classes: 0=none/queen, 1=knight, 2=bishop, 3=rook
 PROMO_CLASSES = 4
 
 # Metadata vector
 META_DIM = 8                           # length of metadata feature vector
+META_DIM_V3 = 10                       # length of metadata feature vector (v3)
 META_RATING_CENTER = DEFAULT_RATING    # 1500 — center for rating normalization
 META_RATING_SCALE = 400                # rating normalization divisor
 META_BASE_TIME_MIN = MIN_BASE_SECONDS  # 60s — lower bound for base-time normalization
@@ -131,3 +134,64 @@ MODEL_DROPOUT = 0.3
 TRAIN_SEED = 42
 INFERENCE_TEMPERATURE_DEFAULT = 1.0
 OPENING_BOOK_PLY_CUTOFF = 10   # currently unused / reserved
+
+# Opening book v2 constants (B.5)
+BOOK_PLY_CUTOFF = 16
+BOOK_MIN_VISITS = 5
+BOOK_ALPHA_K = 10
+
+# Phase D — fine-tuning constants
+FT_MAX_MINUTES = 20
+FT_MAX_EPOCHS = 8
+FT_PATIENCE = 2
+FT_BATCH_SIZE = 256
+FT_LR_FULL = 3e-4
+FT_LR_FREEZE = 5e-4
+FT_LR_FILM_ONLY = 1e-3
+FT_FREEZE_UNTIL_BLOCK = 3
+FT_MIN_VAL_GAMES = 10
+TEMPERATURE_GRID = [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]
+PROMOTION_GATE_MIN_GAMES = 20
+PROMOTION_GATE_BOOTSTRAP_N = 2000
+PROMOTION_GATE_SEED = 0
+
+# Phase E — inference v2
+PROVIDER = "v3"                        # "legacy" or "v3"
+MODEL_CACHE_SIZE = 8
+TOP_P = 0.95
+THINK_MIN_SAMPLES_PER_BUCKET = 20
+THINK_MAX_SAMPLES_PER_BUCKET = 500
+THINK_FLOOR_MS = 150
+THINK_MARGIN_MS = 300
+GUARD_ENABLED = False
+GUARD_CP = 300
+STOCKFISH_PATH = None
+STOCKFISH_DEPTH = 12
+TELEMETRY_ENABLED = True
+
+# Phase SP — self-play
+SP_MAX_PLIES = 300
+SP_DEFAULT_GAMES = 20
+SP_THINK_FLOOR_MS = 150
+SP_THINK_MARGIN_MS = 300
+BASE_THINKTIME_DIR = DATA_ROOT / "base" / "thinktime"
+BASE_THINKTIME_SEED = 0
+BASE_THINKTIME_MAX_PER_BUCKET = 500
+
+# Phase P — analysis and error model
+STOCKFISH_PATH = r"E:\dynamic_bots\tools\stockfish\stockfish.exe"
+STOCKFISH_DEPTH = 12
+STOCKFISH_THREADS = 1
+STOCKFISH_HASH_MB = 64
+ERROR_MODEL_MIN_CP_LOSS = 100
+ERROR_MODEL_BLUNDER_CP = 300
+ERROR_MODEL_CP_CLIP = 1000
+ERROR_MODEL_POOLED_WEIGHT = 200
+ERROR_MODEL_FALLBACK_RATE = 0.08
+
+# Phase G — Database & Auth
+DB_PATH = Path(os.environ.get("DB_PATH", str(DATA_ROOT / "app.db")))
+INVITE_CODE_REQUIRED = True
+MAX_USER_BOTS = 10
+SESSION_EXPIRE_DAYS = 30
+SECRET_KEY = os.environ.get("SECRET_KEY", "phase_g_secret_key_development_only")
