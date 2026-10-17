@@ -190,10 +190,9 @@ ERROR_MODEL_POOLED_WEIGHT = 200
 ERROR_MODEL_FALLBACK_RATE = 0.08
 
 # Optimal parameters from paired-replay calibration (5 seeds, 5,004 positions)
-# NOTE: Greedy was measured but rejected. Rationale: deterministic sampling
-# destroys imitation diversity. This config preserves stochasticity while
-# remaining statistically tied with the ACPL floor.
-OPTIMAL_T_BASE: float = 0.30
+# Selected Option B (t=0.70, top_p=0.70): preserves genuine move variety
+# (32.17% stochastic positions, 1.48 unique moves/pos) at an ACPL cost of +4.30 cp vs greedy.
+OPTIMAL_T_BASE: float = 0.70
 OPTIMAL_TOP_P: float = 0.70
 OPTIMAL_ERROR_MULT: float = 1.0
 ERROR_MODEL_ENABLED: bool = False

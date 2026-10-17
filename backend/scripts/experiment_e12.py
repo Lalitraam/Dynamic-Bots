@@ -93,12 +93,14 @@ def run_e12(username: str = "the_king_crusher", max_rows: int | None = 1000, see
     results_a = {"matches": 0, "nlls": [], "errors_triggered": 0, "actual_errors": 0, "p_errs": []}
     results_b = {"matches": 0, "nlls": [], "errors_triggered": 0, "actual_errors": 0, "p_errs": []}
 
-    # Estimate human error rate from analysis_train or fallback
-    human_error_rate = 0.130
-    analysis_train_path = player_dir / "analysis_train.parquet"
-    if analysis_train_path.exists():
-        df_tr_an = pq.read_table(analysis_train_path, columns=["is_error"]).to_pandas()
-        human_error_rate = float(df_tr_an["is_error"].mean())
+    # Load human error rate from unified JSON baseline
+    baseline_path = Path(__file__).resolve().parents[1] / "data_baselines" / "human_baseline_the_king_crusher.json"
+    if baseline_path.exists():
+        with open(baseline_path, "r", encoding="utf-8") as f:
+            hb = json.load(f)
+        human_error_rate = hb["metrics"]["rate_100_cp"]["value"]
+    else:
+        human_error_rate = 0.1349
 
     for idx, (_, row) in enumerate(df_test.iterrows()):
         fen = str(row["fen"])

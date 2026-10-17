@@ -1,0 +1,41 @@
+{
+  "player_username": "the_king_crusher",
+  "date": "2026-10-17",
+  "n_positions": 5004,
+  "n_games": 120,
+  "stockfish_depth": 12,
+  "stockfish_version": "sf_16.1",
+  "metrics": {
+    "acpl": {
+      "value": 55.6159,
+      "ci_95": [
+        50.1903,
+        61.2356
+      ]
+    },
+    "rate_100_cp": {
+      "value": 0.1349,
+      "percent": 13.49,
+      "ci_95": [
+        0.1213,
+        0.1494
+      ],
+      "ci_95_percent": [
+        12.13,
+        14.94
+      ]
+    },
+    "rate_300_cp": {
+      "value": 0.0386,
+      "percent": 3.86,
+      "ci_95": [
+        0.0324,
+        0.0454
+      ],
+      "ci_95_percent": [
+        3.24,
+        4.54
+      ]
+    }
+  }
+}

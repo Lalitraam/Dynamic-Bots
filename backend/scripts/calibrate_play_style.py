@@ -33,9 +33,18 @@ from app.engine.provider import MoveContext
 from app.engine.provider_v3 import _build_board_planes, _build_meta, _apply_top_p, _sample_from
 
 
-HUMAN_ACPL = 55.62
-HUMAN_100_RATE = 13.49
-HUMAN_300_RATE = 3.86
+# Load human baseline from unified JSON baseline
+try:
+    _bpath = Path(__file__).resolve().parents[1] / "data_baselines" / "human_baseline_the_king_crusher.json"
+    with open(_bpath, "r", encoding="utf-8") as _f:
+        _hb = json.load(_f)
+    HUMAN_ACPL = _hb["metrics"]["acpl"]["value"]
+    HUMAN_100_RATE = _hb["metrics"]["rate_100_cp"]["percent"]
+    HUMAN_300_RATE = _hb["metrics"]["rate_300_cp"]["percent"]
+except Exception:
+    HUMAN_ACPL = 55.62
+    HUMAN_100_RATE = 13.49
+    HUMAN_300_RATE = 3.86
 
 
 def compute_game_level_bootstrap_ci(

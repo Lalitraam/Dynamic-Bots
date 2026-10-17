@@ -38,20 +38,20 @@ def run_e13(
     if not samples_path.exists():
         raise FileNotFoundError(f"Samples file not found at {samples_path}")
 
-    # Estimate human ACPL, error rate and blunder rate from analyzed data
-    human_acpl = 53.2
-    human_error_rate = 0.130
-    human_blunder_rate = 0.0382
-    analysis_train_path = player_dir / "analysis_train.parquet"
-    if analysis_train_path.exists():
-        df_tr = pq.read_table(analysis_train_path).to_pandas()
-        if "cp_loss" in df_tr.columns:
-            human_acpl = float(df_tr["cp_loss"].mean())
-            blunder_threshold = getattr(config, "ERROR_MODEL_BLUNDER_CP", 300)
-            human_blunder_rate = float((df_tr["cp_loss"] >= blunder_threshold).mean())
-            human_error_rate = float((df_tr["cp_loss"] >= getattr(config, "ERROR_MODEL_MIN_CP_LOSS", 100)).mean())
+    # Load human baseline from unified JSON baseline
+    baseline_path = Path(__file__).resolve().parents[1] / "data_baselines" / "human_baseline_the_king_crusher.json"
+    if baseline_path.exists():
+        with open(baseline_path, "r", encoding="utf-8") as f:
+            hb = json.load(f)
+        human_acpl = hb["metrics"]["acpl"]["value"]
+        human_error_rate = hb["metrics"]["rate_100_cp"]["value"]
+        human_blunder_rate = hb["metrics"]["rate_300_cp"]["value"]
+    else:
+        human_acpl = 55.62
+        human_error_rate = 0.1349
+        human_blunder_rate = 0.0386
 
-    print(f"Human baseline estimates from {analysis_train_path.name if analysis_train_path.exists() else 'prior'}:")
+    print(f"Human baseline from {baseline_path.name if baseline_path.exists() else 'default'}:")
     print(f"  Real ACPL: {human_acpl:.1f}")
     print(f"  Real Error Rate (>= 100 cp): {human_error_rate * 100:.1f}%")
     print(f"  Real Blunder Rate (>= 300 cp): {human_blunder_rate * 100:.1f}%\n")

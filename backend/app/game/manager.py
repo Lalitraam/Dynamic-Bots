@@ -115,7 +115,7 @@ class GameManager:
                 model_version=1,
                 model_cache=self.provider_cache,
                 think_time_model=self._get_think_time_model(player_username),
-                temperature=1.0,
+                temperature=config.OPTIMAL_T_BASE,
                 data_root=self.data_root,
                 stockfish_analyser=stockfish,
             )
@@ -305,7 +305,7 @@ class GameManager:
                 model_version=1,
                 model_cache=self.provider_cache,
                 think_time_model=self._get_think_time_model(game_state.player_username),
-                temperature=1.0,
+                temperature=config.OPTIMAL_T_BASE,
                 data_root=self.data_root,
                 stockfish_analyser=stockfish,
             )
