@@ -148,3 +148,89 @@ Command: `python scripts/experiment_e13.py --games 20`
   | **Win Rate vs Base** | N/A | 40.0% |
 - **Takeaway:** Calibration gap remains (ACPL delta 77.0 cp, blunder delta 9.5%).
 
+### Paired Replay Calibration (Extended Grid, 5 Seeds, Paired Test Data)
+
+#### 1. Paired Human Baseline
+Previous preliminary baselines were extracted from training split rows (53.2 cp ACPL). The full paired human baseline was re-analyzed with Stockfish 16+ (depth 12) strictly across all **5,004 test positions**:
+- **Human ACPL:** **55.62 cp**
+- **Human $\ge 100$ cp Rate (Errors):** **13.49%**
+- **Human $\ge 300$ cp Rate (Blunders):** **3.86%**
+
+#### 2. Extended Grid Calibration Results (29 Configurations, 5 Seeds)
+Evaluated across 28 sampling configurations ($t_{\text{base}} \in [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 1.0]$, $\text{top\_p} \in [0.5, 0.7, 0.85, 0.95]$) and 1 deterministic greedy configuration ($t_{\text{base}}=\text{greedy}, \text{top\_p}=\text{greedy}$). Configurations are ranked by **Maximum Relative Error** against human baselines ($\max(\text{err}_{\text{acpl}}, \text{err}_{100}, \text{err}_{300})$):
+
+| Config | $t_{\text{base}}$ | $\text{top\_p}$ | Top-1 Acc (%) | ACPL (cp) | $\ge 100$ cp (%) | $\ge 300$ cp (%) | Max Rel Err | Rank |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **greedy** | **greedy** | **greedy** | **47.7 ± 0.00** | **89.1 ± 0.00** | **19.1 ± 0.00** | **8.9 ± 0.00** | **1.2987** | **1** |
+| t=0.30_p=0.50 | 0.30 | 0.50 | 47.4 ± 0.04 | 90.7 ± 0.29 | 19.3 ± 0.05 | 9.1 ± 0.04 | 1.3484 | 2 |
+| t=0.30_p=0.70 | 0.30 | 0.70 | 47.3 ± 0.06 | 90.6 ± 0.53 | 19.4 ± 0.10 | 9.1 ± 0.09 | 1.3494 | 3 |
+| t=0.40_p=0.50 | 0.40 | 0.50 | 47.4 ± 0.03 | 90.7 ± 0.33 | 19.3 ± 0.07 | 9.1 ± 0.04 | 1.3515 | 4 |
+| t=0.40_p=0.70 | 0.40 | 0.70 | 47.2 ± 0.10 | 90.7 ± 0.45 | 19.5 ± 0.07 | 9.1 ± 0.07 | 1.3556 | 5 |
+| t=0.60_p=0.50 | 0.60 | 0.50 | 47.3 ± 0.08 | 90.7 ± 0.37 | 19.5 ± 0.08 | 9.1 ± 0.09 | 1.3587 | 6 |
+| t=0.50_p=0.50 | 0.50 | 0.50 | 47.4 ± 0.04 | 90.9 ± 0.46 | 19.4 ± 0.10 | 9.1 ± 0.07 | 1.3587 | 7 |
+| t=0.70_p=0.50 | 0.70 | 0.50 | 47.2 ± 0.09 | 91.3 ± 0.67 | 19.6 ± 0.14 | 9.1 ± 0.13 | 1.3629 | 8 |
+| t=0.80_p=0.50 | 0.80 | 0.50 | 46.9 ± 0.08 | 91.7 ± 0.44 | 19.7 ± 0.07 | 9.1 ± 0.08 | 1.3649 | 9 |
+| t=0.30_p=0.85 | 0.30 | 0.85 | 47.2 ± 0.02 | 91.3 ± 0.39 | 19.6 ± 0.06 | 9.2 ± 0.06 | 1.3784 | 10 |
+| t=1.00_p=0.50 | 1.00 | 0.50 | 46.0 ± 0.12 | 92.6 ± 1.17 | 20.0 ± 0.24 | 9.2 ± 0.13 | 1.3784 | 11 |
+| t=0.50_p=0.70 | 0.50 | 0.70 | 47.0 ± 0.08 | 92.0 ± 0.82 | 19.7 ± 0.15 | 9.2 ± 0.09 | 1.3815 | 12 |
+| t=0.30_p=0.95 | 0.30 | 0.95 | 46.7 ± 0.15 | 92.2 ± 0.28 | 19.9 ± 0.19 | 9.2 ± 0.07 | 1.3877 | 13 |
+| t=0.50_p=0.85 | 0.50 | 0.85 | 46.2 ± 0.09 | 93.0 ± 1.03 | 20.0 ± 0.19 | 9.2 ± 0.15 | 1.3939 | 14 |
+| t=0.60_p=0.70 | 0.60 | 0.70 | 46.6 ± 0.14 | 92.8 ± 1.25 | 20.0 ± 0.22 | 9.2 ± 0.15 | 1.3960 | 15 |
+| t=0.40_p=0.85 | 0.40 | 0.85 | 46.8 ± 0.14 | 92.8 ± 0.54 | 19.9 ± 0.19 | 9.3 ± 0.10 | 1.4012 | 16 |
+| t=0.40_p=0.95 | 0.40 | 0.95 | 45.9 ± 0.22 | 93.6 ± 1.21 | 20.1 ± 0.23 | 9.3 ± 0.18 | 1.4178 | 17 |
+| t=0.70_p=0.70 | 0.70 | 0.70 | 46.0 ± 0.22 | 93.4 ± 1.10 | 20.2 ± 0.19 | 9.3 ± 0.14 | 1.4198 | 18 |
+| t=0.80_p=0.70 | 0.80 | 0.70 | 45.2 ± 0.20 | 94.3 ± 1.52 | 20.5 ± 0.11 | 9.4 ± 0.17 | 1.4457 | 19 |
+| t=0.50_p=0.95 | 0.50 | 0.95 | 44.6 ± 0.09 | 95.3 ± 1.53 | 20.6 ± 0.29 | 9.5 ± 0.26 | 1.4654 | 20 |
+| t=0.60_p=0.85 | 0.60 | 0.85 | 45.1 ± 0.17 | 94.9 ± 2.01 | 20.5 ± 0.30 | 9.5 ± 0.24 | 1.4675 | 21 |
+| t=0.70_p=0.85 | 0.70 | 0.85 | 43.7 ± 0.15 | 97.2 ± 1.82 | 21.0 ± 0.23 | 9.8 ± 0.32 | 1.5337 | 22 |
+| t=0.60_p=0.95 | 0.60 | 0.95 | 42.9 ± 0.12 | 99.0 ± 1.97 | 21.4 ± 0.25 | 10.0 ± 0.35 | 1.5824 | 23 |
+| t=1.00_p=0.70 | 1.00 | 0.70 | 42.3 ± 0.27 | 99.0 ± 1.63 | 21.7 ± 0.34 | 10.0 ± 0.28 | 1.5865 | 24 |
+| t=0.80_p=0.85 | 0.80 | 0.85 | 41.9 ± 0.16 | 100.3 ± 1.69 | 21.8 ± 0.31 | 10.1 ± 0.30 | 1.6217 | 25 |
+| t=0.70_p=0.95 | 0.70 | 0.95 | 41.1 ± 0.29 | 104.7 ± 2.26 | 22.6 ± 0.24 | 10.7 ± 0.36 | 1.7771 | 26 |
+| t=0.80_p=0.95 | 0.80 | 0.95 | 38.9 ± 0.22 | 110.5 ± 2.18 | 24.0 ± 0.39 | 11.3 ± 0.36 | 1.9303 | 27 |
+| t=1.00_p=0.85 | 1.00 | 0.85 | 38.0 ± 0.18 | 111.6 ± 1.98 | 24.3 ± 0.38 | 11.5 ± 0.36 | 1.9686 | 28 |
+| t=1.00_p=0.95 | 1.00 | 0.95 | 34.0 ± 0.32 | 126.5 ± 2.68 | 26.9 ± 0.31 | 13.3 ± 0.44 | 2.4449 | 29 |
+
+#### 3. Top-3 Configurations & 95% Game-Level Bootstrap Confidence Intervals (2,000 Iterations)
+
+- **Rank 1: `greedy` ($t_{\text{base}}=\text{greedy}, \text{top\_p}=\text{greedy}$)**
+  - Top-1 Accuracy: **47.72%** (std: 0.00%)
+  - ACPL: **89.07 cp** (Human: 55.62 cp, 95% CI: `[81.67, 96.16]`)
+  - $\ge 100$ cp Rate: **19.06%** (Human: 13.49%, 95% CI: `[17.58%, 20.45%]`)
+  - $\ge 300$ cp Rate: **8.87%** (Human: 3.86%, 95% CI: `[7.82%, 9.88%]`)
+  - Maximum Relative Error: **1.2987**
+
+- **Rank 2: `t=0.30_p=0.50` ($t_{\text{base}}=0.30, \text{top\_p}=0.50$)**
+  - Top-1 Accuracy: **47.43%** (std: 0.04%)
+  - ACPL: **90.73 cp** (Human: 55.62 cp, 95% CI: `[83.37, 97.77]`)
+  - $\ge 100$ cp Rate: **19.33%** (Human: 13.49%, 95% CI: `[17.95%, 20.76%]`)
+  - $\ge 300$ cp Rate: **9.06%** (Human: 3.86%, 95% CI: `[8.01%, 10.06%]`)
+  - Maximum Relative Error: **1.3484**
+
+- **Rank 3: `t=0.30_p=0.70` ($t_{\text{base}}=0.30, \text{top\_p}=0.70$)**
+  - Top-1 Accuracy: **47.35%** (std: 0.06%)
+  - ACPL: **90.57 cp** (Human: 55.62 cp, 95% CI: `[83.43, 97.53]`)
+  - $\ge 100$ cp Rate: **19.40%** (Human: 13.49%, 95% CI: `[18.18%, 21.00%]`)
+  - $\ge 300$ cp Rate: **9.07%** (Human: 3.86%, 95% CI: `[7.99%, 9.99%]`)
+  - Maximum Relative Error: **1.3494**
+
+#### 4. Decision on Error Model & Production Configuration
+- **Outcome:** The evaluation confirms that flattening sampling temperature via an error branch ($\text{error\_mult} > 1.0$) increases unforced blunders. Furthermore, deterministic greedy selection and low-temperature sampling without error model flattening strictly dominate.
+- **Decision:**
+  - Set `config.ERROR_MODEL_ENABLED = False`.
+  - Production parameters: `OPTIMAL_T_BASE = 0.30`, `OPTIMAL_TOP_P = 0.70`, `OPTIMAL_ERROR_MULT = 1.0`.
+  - **Greedy Rejection Rationale:** Greedy was measured but rejected because behavioural cloning requires stochasticity. A deterministic bot has no move variety and cannot reproduce a human's tactical unpredictability. `t=0.30, top_p=0.70` is statistically tied on strength (ACPL 90.57 ± 0.53 cp vs greedy 89.07 cp; blunder rate 9.07% vs 8.87% with heavily overlapping bootstrap CIs) while retaining the sampling distribution that makes the bot feel like a specific human player.
+  - In `V3Provider.decide()`, when `ERROR_MODEL_ENABLED=False`, error model prediction is skipped, pure $t_{\text{base}}$ is used, and $p_{\text{err}}=\text{None}$ is recorded in telemetry.
+
+#### 5. Honest Scientific Limitation
+> [!NOTE]
+> **Honest Limitation:** Fine-tuning alone caps top-1 move agreement at ~47%. Closing the remaining ACPL gap (89.1 cp vs human 55.62 cp) requires more training data (plan E11), not better sampling. This is documented as future work.
+
+### Error Model Calibration Metrics (Test Split)
+- **Error Model AUC-ROC:** 0.6586
+- **Error Model Brier Score:** 0.1135
+
+> [!NOTE]
+> Despite the classifier being well-calibrated (AUC 0.6586, Brier 0.1135), using its predictions to flatten the sampling temperature worsened ACPL (from 89.07 to 130+). Therefore, the model is disabled for gameplay (`ERROR_MODEL_ENABLED = False`) but retained for dashboard analytics.
+
+

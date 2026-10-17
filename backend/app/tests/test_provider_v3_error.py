@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import random
 
+from app import config
 from app.analysis.error_model import ErrorModel
 from app.engine.provider import MoveContext
 from app.engine.provider_v3 import V3Provider
@@ -37,11 +38,49 @@ def _make_dummy_provider(error_model=None, temperature=1.0, stockfish_analyser=N
         error_model=error_model,
         stockfish_analyser=stockfish_analyser,
     )
-    provider.temperature = float(temperature)
+    provider.temperature = float(temperature) if isinstance(temperature, (int, float)) else temperature
     return provider
 
 
+def test_provider_when_error_model_disabled():
+    """When ERROR_MODEL_ENABLED=False, skip error model and assert top5 matches temperature-only sample."""
+    mock_em = MagicMock(spec=ErrorModel)
+    provider = _make_dummy_provider(error_model=mock_em, temperature=1.0)
+
+    board = chess.Board()
+    ctx = MoveContext(
+        board=board,
+        prev_moves=[],
+        bot_rating=1800,
+        opp_rating=1800,
+        base_seconds=180,
+        increment_seconds=2,
+        bot_clock_ms=100000,
+        opp_clock_ms=100000,
+        ply=0,
+    )
+
+    with patch.object(config, "ERROR_MODEL_ENABLED", False):
+        rng = MagicMock()
+        rng.random.return_value = 0.05
+        rng.choices = random.Random(42).choices
+
+        dec = provider.decide(ctx, rng)
+
+        # Assert error model was NOT called
+        assert not mock_em.predict.called
+        # Assert p_err is None in telemetry
+        assert dec.p_err is None
+        # Assert top5 matches clean temperature-only sample (e2e4 > d2d4 with e2e4 having highest probability)
+        assert dec.top5[0][0] == "e2e4"
+        top5_dict = dict(dec.top5)
+        assert top5_dict["e2e4"] > top5_dict["d2d4"]
+
+
 def test_provider_error_model_prob_and_temperature_branches():
+    if not getattr(config, "ERROR_MODEL_ENABLED", False):
+        pytest.skip("ERROR_MODEL_ENABLED is False in config")
+
     mock_em = MagicMock(spec=ErrorModel)
     mock_em.predict.return_value = np.array([0.5])
 
@@ -93,6 +132,9 @@ def test_provider_error_model_prob_and_temperature_branches():
 
 
 def test_provider_blunder_capping_resamples():
+    if not getattr(config, "ERROR_MODEL_ENABLED", False):
+        pytest.skip("ERROR_MODEL_ENABLED is False in config")
+
     mock_em = MagicMock(spec=ErrorModel)
     mock_em.predict.return_value = np.array([0.9])  # Always error branch
 

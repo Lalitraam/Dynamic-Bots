@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 from app import config
 from app.analysis.stockfish import StockfishAnalyser
 from app.db.games import add_move as db_add_move, add_telemetry, create_game as db_create_game, get_game as db_get_game, get_moves as db_get_moves, update_game as db_update_game
+from app.db.players import get_player_median_rating
 from app.engine.model_cache import ModelCache
 from app.engine.provider import MoveContext
 from app.engine.provider_v3 import V3Provider
@@ -38,28 +39,7 @@ class GameManager:
         self._stockfish: StockfishAnalyser | None = None
 
     def _get_player_rating(self, username: str) -> int:
-        player_dir = self.data_root / "players" / username
-        info_file = player_dir / "info.json"
-        if info_file.exists():
-            try:
-                with open(info_file, "r", encoding="utf-8") as f:
-                    info = json.load(f)
-                    if "median_rating" in info:
-                        return int(info["median_rating"])
-                    if "player_rating" in info:
-                        return int(info["player_rating"])
-            except Exception:
-                pass
-        for s_name in ("samples_v3.parquet", "samples.parquet"):
-            sp = player_dir / s_name
-            if sp.exists():
-                try:
-                    df = pq.read_table(sp, columns=["player_rating"]).to_pandas()
-                    if "player_rating" in df.columns and len(df) > 0:
-                        return int(df["player_rating"].median())
-                except Exception:
-                    pass
-        return config.DEFAULT_RATING
+        return get_player_median_rating(username)
 
     def _get_stockfish_analyser(self) -> StockfishAnalyser | None:
         sf_path = getattr(config, "STOCKFISH_PATH", None)

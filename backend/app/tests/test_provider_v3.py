@@ -200,7 +200,11 @@ def test_7_provider_decision_includes_p_err():
         opp_clock_ms=120000,
         ply=0,
     )
-    decision = provider.decide(ctx, random.Random(42))
-    assert decision.p_err is not None
-    assert 0.0 <= decision.p_err <= 1.0
+    if not getattr(config, "ERROR_MODEL_ENABLED", False):
+        decision = provider.decide(ctx, random.Random(42))
+        assert decision.p_err is None
+    else:
+        decision = provider.decide(ctx, random.Random(42))
+        assert decision.p_err is not None
+        assert 0.0 <= decision.p_err <= 1.0
 

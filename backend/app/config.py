@@ -189,6 +189,15 @@ ERROR_MODEL_CP_CLIP = 1000
 ERROR_MODEL_POOLED_WEIGHT = 200
 ERROR_MODEL_FALLBACK_RATE = 0.08
 
+# Optimal parameters from paired-replay calibration (5 seeds, 5,004 positions)
+# NOTE: Greedy was measured but rejected. Rationale: deterministic sampling
+# destroys imitation diversity. This config preserves stochasticity while
+# remaining statistically tied with the ACPL floor.
+OPTIMAL_T_BASE: float = 0.30
+OPTIMAL_TOP_P: float = 0.70
+OPTIMAL_ERROR_MULT: float = 1.0
+ERROR_MODEL_ENABLED: bool = False
+
 # Phase G — Database & Auth
 DB_PATH = Path(os.environ.get("DB_PATH", str(DATA_ROOT / "app.db")))
 INVITE_CODE_REQUIRED = True

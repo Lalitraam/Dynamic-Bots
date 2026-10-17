@@ -179,10 +179,12 @@ class V3Provider:
             try:
                 with open(temp_file, "r", encoding="utf-8") as f:
                     t_data = json.load(f)
-                    temperature = float(t_data.get("T_best", t_data.get("optimal_temperature", 1.0)))
             except Exception:
                 pass
-        self.temperature = max(1e-4, float(temperature))
+        if temperature == "greedy":
+            self.temperature = "greedy"
+        else:
+            self.temperature = max(1e-4, float(temperature))
 
         # Read median player rating and p99 cp loss from player info if present
         self.bot_rating_from_model: int = config.DEFAULT_RATING
@@ -242,25 +244,46 @@ class V3Provider:
             policy_lps = None
 
         # Error probability model prediction and temperature determination
-        clock_sec = (ctx.bot_clock_ms / 1000.0) if ctx.bot_clock_ms is not None else None
-        if self.error_model is not None:
-            feats = compute_features(
-                board=ctx.board,
-                clock_before=clock_sec,
-                base_s=ctx.base_seconds,
-                ply=ctx.ply,
-                policy_log_probs=policy_lps,
-            )
-            p_err = float(self.error_model.predict(feats)[0])
-        else:
-            p_err = float(getattr(config, "ERROR_MODEL_FALLBACK_RATE", 0.08))
+        error_model_enabled = getattr(config, "ERROR_MODEL_ENABLED", False)
+        if error_model_enabled:
+            clock_sec = (ctx.bot_clock_ms / 1000.0) if ctx.bot_clock_ms is not None else None
+            if self.error_model is not None:
+                feats = compute_features(
+                    board=ctx.board,
+                    clock_before=clock_sec,
+                    base_s=ctx.base_seconds,
+                    ply=ctx.ply,
+                    policy_log_probs=policy_lps,
+                )
+                p_err = float(self.error_model.predict(feats)[0])
+            else:
+                p_err = float(getattr(config, "ERROR_MODEL_FALLBACK_RATE", 0.08))
 
-        u = rng.random()
-        t_base = self.temperature
-        if u < p_err:
-            eff_temp = max(1e-4, t_base * 1.1)
+            u = rng.random()
+            t_base = self.temperature
+            if u < p_err:
+                eff_temp = max(1e-4, t_base * 1.1)
+            else:
+                eff_temp = max(1e-4, t_base)
         else:
-            eff_temp = max(1e-4, t_base)
+            p_err = None
+            u = 1.0
+            eff_temp = max(1e-4, float(self.temperature)) if isinstance(self.temperature, (int, float)) else 1.0
+
+        if self.temperature == "greedy":
+            best_idx = int(np.argmax([legal_lps[m.uci()] for m in legal_moves]))
+            chosen_move = legal_moves[best_idx]
+            sorted_moves = sorted(legal_moves, key=lambda m: legal_lps[m.uci()], reverse=True)
+            top5 = [(m.uci(), 1.0 if idx == 0 else 0.0) for idx, m in enumerate(sorted_moves[:5])]
+            model_version_str = "base" if self.is_base_fallback else f"{self.username}:v{self.model_version}"
+            return MoveDecision(
+                move=chosen_move,
+                source="model",
+                think_ms=think_ms,
+                top5=top5,
+                p_err=p_err,
+                model_version=model_version_str,
+            )
 
         policy_logits = raw_logits / eff_temp
 
@@ -332,7 +355,7 @@ class V3Provider:
         chosen_move = legal_moves[chosen_idx]
 
         # If in error branch (u < p_err), cap blunder if Stockfish is enabled
-        if u < p_err and len(legal_moves) > 1:
+        if p_err is not None and u < p_err and len(legal_moves) > 1:
             loss = self._compute_cp_loss(ctx.board, chosen_move)
             cap = min(self.player_p99, 600.0)
             if loss > cap:
