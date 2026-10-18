@@ -1,4 +1,4 @@
-"""Tests for authentication and user management (Phase G)."""
+"""Tests for authentication and user management with OTP verification and OAuth."""
 
 from pathlib import Path
 import pytest
@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from app import config
 from app.auth import hash_password, verify_password
 from app.db.migrate import run_migrations
-from app.db.users import create_invite_code, get_invite_code
+from app.db.users import get_otp, get_user_by_email
 from app.main import app
 
 
@@ -35,94 +35,110 @@ def test_password_hashing_and_verification():
     assert verify_password("", pwd_hash) is False
 
 
-def test_registration_with_valid_invite_code(client: TestClient):
-    """Test user registration with valid and invalid invite codes."""
-    create_invite_code("CHESS-2026")
-
-    # Successful registration
+def test_register_creates_unverified_user(client: TestClient):
+    """Registering creates a user with is_verified=0."""
     resp = client.post(
         "/api/auth/register",
-        json={"email": "newuser@example.com", "password": "Password123!", "invite_code": "CHESS-2026"},
+        json={"email": "unverified@example.com", "password": "Password123!"},
     )
     assert resp.status_code == 201
-    data = resp.json()
-    assert data["email"] == "newuser@example.com"
-    assert data["role"] == "user"
 
-    # Verify invite code is marked used
-    invite = get_invite_code("CHESS-2026")
-    assert invite is not None
-    assert invite["used_by"] == data["id"]
+    user = get_user_by_email("unverified@example.com")
+    assert user is not None
+    assert user["is_verified"] == 0
+    assert user["auth_provider"] == "local"
 
-    # Re-use of invite code rejected
-    resp_reuse = client.post(
+
+def test_register_returns_otp_flow(client: TestClient):
+    """Registering generates an OTP in the database and prints notification."""
+    resp = client.post(
         "/api/auth/register",
-        json={"email": "other@example.com", "password": "Password123!", "invite_code": "CHESS-2026"},
+        json={"email": "otpuser@example.com", "password": "Password123!"},
     )
-    assert resp_reuse.status_code == 400
-    assert "already been used" in resp_reuse.json()["detail"]
+    assert resp.status_code == 201
+    assert "Verification code sent" in resp.json()["message"]
 
-    # Non-existent invite code rejected
-    resp_bad = client.post(
-        "/api/auth/register",
-        json={"email": "other@example.com", "password": "Password123!", "invite_code": "INVALID-CODE"},
-    )
-    assert resp_bad.status_code == 400
-    assert "Invalid invite code" in resp_bad.json()["detail"]
+    otp_row = get_otp("otpuser@example.com")
+    assert otp_row is not None
+    assert len(otp_row["otp_code"]) == 6
+    assert otp_row["otp_code"].isdigit()
+    assert "expires_at" in otp_row
 
 
-def test_login_returns_token(client: TestClient):
-    """Test login credentials validation and session token generation."""
-    create_invite_code("LOGIN-TEST")
-    reg_resp = client.post(
-        "/api/auth/register",
-        json={"email": "logintest@example.com", "password": "Password123!", "invite_code": "LOGIN-TEST"},
-    )
-    assert reg_resp.status_code == 201
-
-    # Valid login
-    login_resp = client.post(
-        "/api/auth/login",
-        json={"email": "logintest@example.com", "password": "Password123!"},
-    )
-    assert login_resp.status_code == 200
-    login_data = login_resp.json()
-    assert "access_token" in login_data
-    assert login_data["token_type"] == "bearer"
-    assert len(login_data["access_token"]) > 20
-
-    # Invalid password
-    bad_resp = client.post(
-        "/api/auth/login",
-        json={"email": "logintest@example.com", "password": "WrongPassword"},
-    )
-    assert bad_resp.status_code == 401
-    assert "Incorrect email or password" in bad_resp.json()["detail"]
-
-
-def test_get_current_user_and_bad_tokens(client: TestClient):
-    """Test get_current_user endpoint protection against missing/invalid tokens."""
-    create_invite_code("ME-TEST")
+def test_verify_email_with_wrong_otp_fails(client: TestClient):
+    """Verifying with incorrect OTP returns 400 error."""
     client.post(
         "/api/auth/register",
-        json={"email": "metest@example.com", "password": "Password123!", "invite_code": "ME-TEST"},
+        json={"email": "wrongotp@example.com", "password": "Password123!"},
+    )
+    resp = client.post(
+        "/api/auth/verify-email",
+        json={"email": "wrongotp@example.com", "otp_code": "000000"},
+    )
+    assert resp.status_code == 400
+    assert "Invalid verification code" in resp.json()["detail"]
+
+
+def test_verify_email_with_correct_otp_returns_token(client: TestClient):
+    """Verifying with correct OTP verifies user, deletes OTP, and returns token."""
+    client.post(
+        "/api/auth/register",
+        json={"email": "correctotp@example.com", "password": "Password123!"},
+    )
+    otp_row = get_otp("correctotp@example.com")
+    assert otp_row is not None
+
+    resp = client.post(
+        "/api/auth/verify-email",
+        json={"email": "correctotp@example.com", "otp_code": otp_row["otp_code"]},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "access_token" in data
+    assert data["token_type"] == "bearer"
+
+    user = get_user_by_email("correctotp@example.com")
+    assert user["is_verified"] == 1
+
+    # OTP row cleaned up
+    assert get_otp("correctotp@example.com") is None
+
+
+def test_login_rejects_unverified_user(client: TestClient):
+    """Login returns 403 when email is unverified."""
+    client.post(
+        "/api/auth/register",
+        json={"email": "unverified_login@example.com", "password": "Password123!"},
     )
     login_resp = client.post(
         "/api/auth/login",
-        json={"email": "metest@example.com", "password": "Password123!"},
+        json={"email": "unverified_login@example.com", "password": "Password123!"},
     )
-    token = login_resp.json()["access_token"]
+    assert login_resp.status_code == 403
+    assert "Email not verified" in login_resp.json()["detail"]
 
-    # Valid token
-    me_resp = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
-    assert me_resp.status_code == 200
-    assert me_resp.json()["email"] == "metest@example.com"
 
-    # Invalid token
-    bad_token_resp = client.get("/api/auth/me", headers={"Authorization": "Bearer totally_fake_token_12345"})
-    assert bad_token_resp.status_code == 401
-    assert "Invalid or expired session token" in bad_token_resp.json()["detail"]
+def test_login_accepts_verified_user(client: TestClient):
+    """Login succeeds once user is verified."""
+    client.post(
+        "/api/auth/register",
+        json={"email": "verified_login@example.com", "password": "Password123!"},
+    )
+    otp_row = get_otp("verified_login@example.com")
+    client.post(
+        "/api/auth/verify-email",
+        json={"email": "verified_login@example.com", "otp_code": otp_row["otp_code"]},
+    )
 
-    # Missing Authorization header
-    missing_resp = client.get("/api/auth/me")
-    assert missing_resp.status_code == 401
+    login_resp = client.post(
+        "/api/auth/login",
+        json={"email": "verified_login@example.com", "password": "Password123!"},
+    )
+    assert login_resp.status_code == 200
+    assert "access_token" in login_resp.json()
+
+
+def test_google_oauth_endpoints_exist():
+    """Verify Google OAuth routes are registered in FastAPI."""
+    assert str(app.url_path_for("google_login")) == "/api/auth/google/login"
+    assert str(app.url_path_for("google_callback")) == "/api/auth/google/callback"

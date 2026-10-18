@@ -8,3 +8,7 @@ pyarrow==25.0.1
 torch==2.11.0
 matplotlib==3.10.1
 argon2-cffi==25.1.0
+authlib
+itsdangerous
+python-multipart
+email-validator

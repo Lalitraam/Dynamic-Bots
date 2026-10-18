@@ -45,7 +45,20 @@ def run_migrations(db_path: Path | str | None = None) -> list[str]:
         if version not in applied_versions:
             sql_content = sql_file.read_text(encoding="utf-8")
             with conn:
-                conn.executescript(sql_content)
+                try:
+                    conn.executescript(sql_content)
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" in str(e).lower():
+                        for stmt in sql_content.split(";"):
+                            stmt_clean = stmt.strip()
+                            if stmt_clean:
+                                try:
+                                    conn.execute(stmt_clean)
+                                except sqlite3.OperationalError as stmt_err:
+                                    if "duplicate column name" not in str(stmt_err).lower():
+                                        raise stmt_err
+                    else:
+                        raise e
                 conn.execute(
                     "INSERT INTO schema_migrations (version) VALUES (?);",
                     (version,),

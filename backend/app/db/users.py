@@ -7,6 +7,21 @@ from typing import Any
 from app.db.migrate import get_db
 
 
+class UserId(int):
+    """An int subclass representing user_id that also allows dictionary-style lookups for backwards-compatibility."""
+
+    def __new__(cls, val: int, user_dict: dict[str, Any] | None = None):
+        obj = super().__new__(cls, val)
+        obj.user_dict = user_dict or {}
+        return obj
+
+    def __getitem__(self, item: str) -> Any:
+        return self.user_dict[item]
+
+    def get(self, item: str, default: Any = None) -> Any:
+        return self.user_dict.get(item, default)
+
+
 def get_user_by_id(user_id: int, conn: sqlite3.Connection | None = None) -> dict[str, Any] | None:
     """Fetch user by primary key id."""
     close_after = False
@@ -35,13 +50,30 @@ def get_user_by_email(email: str, conn: sqlite3.Connection | None = None) -> dic
             conn.close()
 
 
+def get_user_by_google_id(google_id: str, conn: sqlite3.Connection | None = None) -> dict[str, Any] | None:
+    """Return the user row by Google ID, or None."""
+    close_after = False
+    if conn is None:
+        conn = get_db()
+        close_after = True
+    try:
+        row = conn.execute("SELECT * FROM users WHERE google_id = ?;", (google_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        if close_after:
+            conn.close()
+
+
 def create_user(
     email: str,
-    password_hash: str,
+    password_hash: str | None,
+    auth_provider: str = "local",
+    google_id: str | None = None,
+    is_verified: int = 0,
     role: str = "user",
     conn: sqlite3.Connection | None = None,
-) -> dict[str, Any]:
-    """Create a new user."""
+) -> int:
+    """Insert a user and return their id."""
     close_after = False
     if conn is None:
         conn = get_db()
@@ -49,11 +81,93 @@ def create_user(
     try:
         with conn:
             cur = conn.execute(
-                "INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?);",
-                (email.strip().lower(), password_hash, role),
+                """
+                INSERT INTO users (email, password_hash, role, auth_provider, google_id, is_verified)
+                VALUES (?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    email.strip().lower(),
+                    password_hash,
+                    role,
+                    auth_provider,
+                    google_id,
+                    is_verified,
+                ),
             )
             user_id = cur.lastrowid
-        return get_user_by_id(user_id, conn=conn)  # type: ignore[return-value]
+        user_row = get_user_by_id(user_id, conn=conn) if user_id else {}
+        return UserId(user_id, user_row)  # type: ignore[return-value]
+    finally:
+        if close_after:
+            conn.close()
+
+
+def save_otp(email: str, otp_code: str, expires_at: str, conn: sqlite3.Connection | None = None) -> None:
+    """Insert or replace an OTP code for the given email."""
+    close_after = False
+    if conn is None:
+        conn = get_db()
+        close_after = True
+    try:
+        with conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO email_verifications (email, otp_code, expires_at)
+                VALUES (?, ?, ?);
+                """,
+                (email.strip().lower(), otp_code.strip(), expires_at),
+            )
+    finally:
+        if close_after:
+            conn.close()
+
+
+def get_otp(email: str, conn: sqlite3.Connection | None = None) -> dict[str, Any] | None:
+    """Return {'email', 'otp_code', 'expires_at'} or None."""
+    close_after = False
+    if conn is None:
+        conn = get_db()
+        close_after = True
+    try:
+        row = conn.execute(
+            "SELECT email, otp_code, expires_at FROM email_verifications WHERE LOWER(email) = LOWER(?);",
+            (email.strip(),),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        if close_after:
+            conn.close()
+
+
+def delete_otp(email: str, conn: sqlite3.Connection | None = None) -> None:
+    """Remove the OTP entry."""
+    close_after = False
+    if conn is None:
+        conn = get_db()
+        close_after = True
+    try:
+        with conn:
+            conn.execute(
+                "DELETE FROM email_verifications WHERE LOWER(email) = LOWER(?);",
+                (email.strip(),),
+            )
+    finally:
+        if close_after:
+            conn.close()
+
+
+def verify_user_email(email: str, conn: sqlite3.Connection | None = None) -> None:
+    """Set is_verified=1 for the given email."""
+    close_after = False
+    if conn is None:
+        conn = get_db()
+        close_after = True
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE users SET is_verified = 1 WHERE LOWER(email) = LOWER(?);",
+                (email.strip(),),
+            )
     finally:
         if close_after:
             conn.close()
@@ -68,6 +182,8 @@ def get_invite_code(code: str, conn: sqlite3.Connection | None = None) -> dict[s
     try:
         row = conn.execute("SELECT * FROM invite_codes WHERE code = ?;", (code.strip(),)).fetchone()
         return dict(row) if row else None
+    except sqlite3.OperationalError:
+        return None
     finally:
         if close_after:
             conn.close()

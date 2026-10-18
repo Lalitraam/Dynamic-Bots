@@ -203,3 +203,9 @@ INVITE_CODE_REQUIRED = True
 MAX_USER_BOTS = 10
 SESSION_EXPIRE_DAYS = 30
 SECRET_KEY = os.environ.get("SECRET_KEY", "phase_g_secret_key_development_only")
+
+# OAuth / auth settings
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+OTP_EXPIRY_MINUTES = 15
