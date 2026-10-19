@@ -31,7 +31,7 @@ class GameClock:
 
         # 1. Calculate elapsed and deduct only if this side already started
         if self.started[side]:
-            elapsed_ms = int((now - self.last_tick) * 1000)
+            elapsed_ms = max(0, int((now - self.last_tick) * 1000))
             self.remaining_ms[side] -= elapsed_ms
             if self.remaining_ms[side] <= 0:
                 self.remaining_ms[side] = 0
@@ -54,7 +54,7 @@ class GameClock:
         out = dict(self.remaining_ms)
 
         if self.last_tick is not None and self.started[self.running_side]:
-            elapsed_ms = int((now - self.last_tick) * 1000)
+            elapsed_ms = max(0, int((now - self.last_tick) * 1000))
             out[self.running_side] = max(0, out[self.running_side] - elapsed_ms)
 
         return out

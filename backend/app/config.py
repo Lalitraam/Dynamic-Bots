@@ -4,7 +4,9 @@ Configuration constants for the Chess Bot Clone Factory.
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
+load_dotenv()
 # Data root directory (resolves to the repo-root data/ folder, the parent of backend/)
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
 
@@ -33,6 +35,7 @@ def default_since_ms(now=None) -> int:
     if now is None:
         now = datetime.now(timezone.utc)
     return int((now.timestamp() - FETCH_SINCE_DAYS * 86400) * 1000)
+
 
 # Rate limiting and resume constants
 RATE_LIMIT_WAIT_SECONDS = 60.0
@@ -127,9 +130,9 @@ TRAIN_LR_FACTOR = 0.5
 LABEL_SMOOTHING = 0.05
 PROMO_LOSS_WEIGHT = 0.2
 AUX_LOSS_WEIGHT = 0.1
-MODEL_CHANNELS = 64
-MODEL_RES_BLOCKS = 5
-MODEL_HIDDEN_DIM = 256
+MODEL_CHANNELS = 96   # Increased from 64 for better style capture
+MODEL_RES_BLOCKS = 7  # Increased from 5 for deeper feature extraction
+MODEL_HIDDEN_DIM = 384 # Increased from 256 for richer representations
 MODEL_DROPOUT = 0.3
 TRAIN_SEED = 42
 INFERENCE_TEMPERATURE_DEFAULT = 1.0
@@ -161,11 +164,11 @@ MODEL_CACHE_SIZE = 8
 TOP_P = 0.95
 THINK_MIN_SAMPLES_PER_BUCKET = 20
 THINK_MAX_SAMPLES_PER_BUCKET = 500
-THINK_FLOOR_MS = 150
-THINK_MARGIN_MS = 300
-GUARD_ENABLED = False
+THINK_FLOOR_MS = 50   # Reduced from 150ms to allow faster moves
+THINK_MARGIN_MS = 50  # Reduced from 300ms to allow faster moves
+GUARD_ENABLED = True
 GUARD_CP = 300
-STOCKFISH_PATH = None
+STOCKFISH_PATH = r"E:\dynamic_bots\tools\stockfish\stockfish.exe"
 STOCKFISH_DEPTH = 12
 TELEMETRY_ENABLED = True
 
@@ -190,10 +193,12 @@ ERROR_MODEL_POOLED_WEIGHT = 200
 ERROR_MODEL_FALLBACK_RATE = 0.08
 
 # Optimal parameters from paired-replay calibration (5 seeds, 5,004 positions)
-# Selected Option B (t=0.70, top_p=0.70): preserves genuine move variety
-# (32.17% stochastic positions, 1.48 unique moves/pos) at an ACPL cost of +4.30 cp vs greedy.
-OPTIMAL_T_BASE: float = 0.70
-OPTIMAL_TOP_P: float = 0.70
+# Adjusted for more conservative play to reduce beginner-like blunders
+# Selected Option B (t=0.40, top_p=0.80): reduces randomness while maintaining style
+# (Expected: ~20% stochastic positions, 1.2 unique moves/pos) at ACPL cost ~+2.0 cp vs greedy.
+OPTIMAL_T_BASE: float = 0.40
+OPTIMAL_TOP_P: float = 0.80
+OPTIMAL_TOP_K: int = 3  # Only consider the top 3 moves (prevents catastrophic blunders)
 OPTIMAL_ERROR_MULT: float = 1.0
 ERROR_MODEL_ENABLED: bool = False
 
@@ -209,3 +214,12 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 OTP_EXPIRY_MINUTES = 15
+
+# SMTP Email settings
+SMTP_HOST = os.environ.get("SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_FROM_EMAIL = os.environ.get("SMTP_FROM_EMAIL", os.environ.get("SMTP_USER", "noreply@doppelgambit.com"))
+SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").lower() in ("true", "1", "yes")
+SMTP_USE_SSL = os.environ.get("SMTP_USE_SSL", "false").lower() in ("true", "1", "yes")

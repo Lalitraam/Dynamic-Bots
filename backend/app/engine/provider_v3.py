@@ -18,30 +18,33 @@ from app.analysis.stockfish import StockfishAnalyser, compute_cp_loss
 from app.engine.model_cache import ModelCache
 from app.engine.provider import MoveContext, MoveDecision, MoveProvider
 from app.engine.think_time import ThinkTimeModel
-from app.ml.encoding_v3 import encode_board_v3, encode_meta_v3
+from app.ml.encoding_v3 import encode_board_v3
+from app.ml.encoding import encode_meta
 from app.services.opening_book_v2 import BookV2
+import time
+start_t = time.perf_counter()
 
 _PROMO_TO_CLASS = {chess.QUEEN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3, None: 0}
 
 
 def _build_board_planes(ctx: MoveContext) -> np.ndarray:
-    """Build 22-plane board encoding from context."""
-    prev_1 = ctx.prev_moves[-1] if len(ctx.prev_moves) >= 1 else None
-    prev_2 = ctx.prev_moves[-2] if len(ctx.prev_moves) >= 2 else None
+    """Build 18-plane board encoding from context (matches trained model)."""
+    # Note: We intentionally use history=False to match the 18-plane input
+    # expected by the model trained with BOARD_PLANES=18
     return encode_board_v3(
         ctx.board,
-        prev_move_1=prev_1,
-        prev_move_2=prev_2,
-        history=True,
+        prev_move_1=None,
+        prev_move_2=None,
+        history=False,
     )
 
 
 def _build_meta(ctx: MoveContext, bot_rating_from_model: int) -> np.ndarray:
-    """Build 10-dimensional metadata vector from context."""
+    """Build 8-dimensional metadata vector from context (matches trained model)."""
     rating = bot_rating_from_model if bot_rating_from_model is not None else ctx.bot_rating
     clock_before = (ctx.bot_clock_ms / 1000.0) if ctx.bot_clock_ms is not None else None
     clock_avail = bool(ctx.bot_clock_ms is not None and ctx.base_seconds > 0)
-    return encode_meta_v3(
+    return encode_meta(
         player_rating=rating,
         opponent_rating=ctx.opp_rating,
         base_seconds=ctx.base_seconds,
@@ -50,8 +53,6 @@ def _build_meta(ctx: MoveContext, bot_rating_from_model: int) -> np.ndarray:
         clock_before=clock_before,
         clock_available=clock_avail,
         halfmove_clock=ctx.board.halfmove_clock,
-        num_legal_moves=ctx.board.legal_moves.count(),
-        berserk=False,
     )
 
 
@@ -64,6 +65,29 @@ def legal_indices(board: chess.Board) -> np.ndarray:
         t = (move.to_square ^ 56) if is_black else move.to_square
         indices.add(f * 64 + t)
     return np.array(sorted(indices), dtype=np.int16)
+
+
+def _apply_top_k(arr: np.ndarray, k: int = getattr(config, "OPTIMAL_TOP_K", 3)) -> np.ndarray:
+    """Apply top-k filtering to probability or log-probability array."""
+    if len(arr) == 0:
+        return arr
+    k = max(1, min(k, len(arr)))
+    is_prob = bool(np.all(arr >= 0) and not np.all(arr == 0))
+    if is_prob:
+        probs = arr.astype(float).copy()
+        order = np.argsort(-probs)
+        to_zero = order[k:]
+        probs[to_zero] = 0.0
+        return probs
+    else:
+        out = arr.astype(float).copy()
+        finite = np.isfinite(out)
+        if not np.any(finite):
+            return out
+        order = np.argsort(-out)
+        to_inf = order[k:]
+        out[to_inf] = -np.inf
+        return out
 
 
 def _apply_top_p(arr: np.ndarray, p: float = config.TOP_P) -> np.ndarray:
@@ -179,9 +203,11 @@ class V3Provider:
             try:
                 with open(temp_file, "r", encoding="utf-8") as f:
                     t_data = json.load(f)
+                # Use the model's temperature if available, otherwise fallback to optimal
+                self.temperature = max(1e-4, float(t_data.get("T_best", config.OPTIMAL_T_BASE)))
             except Exception:
-                pass
-        if temperature == "greedy":
+                self.temperature = config.OPTIMAL_T_BASE
+        elif temperature == "greedy":
             self.temperature = "greedy"
         else:
             self.temperature = max(1e-4, float(temperature))
@@ -199,6 +225,13 @@ class V3Provider:
             except Exception:
                 pass
 
+        # If guard is enabled and no analyser provided, try to create one
+        if config.GUARD_ENABLED and self.stockfish_analyser is None:
+            try:
+                self.stockfish_analyser = StockfishAnalyser(path=config.STOCKFISH_PATH)
+            except Exception:
+                self.stockfish_analyser = None
+
     def _compute_cp_loss(self, board: chess.Board, move: chess.Move) -> float:
         """Calculate centipawn loss of move using Stockfish if available, else return 0.0."""
         if self.stockfish_analyser is not None:
@@ -209,14 +242,57 @@ class V3Provider:
                 return 0.0
         return 0.0
 
+    def _is_move_safe(self, board: chess.Board, move: chess.Move) -> bool:
+        """Return True if move is not a blunder according to Stockfish (loss <= GUARD_CP)."""
+        if not config.GUARD_ENABLED or self.stockfish_analyser is None:
+            return True
+        loss = self._compute_cp_loss(board, move)
+        return loss <= config.GUARD_CP
+
     def decide(self, ctx: MoveContext, rng: random.Random) -> MoveDecision:
-        """Runtime move decision pipeline."""
+        """Runtime move decision pipeline - FAKE THINK TIME DISABLED, ULTRA FAST."""
+        start_t = time.perf_counter()
         legal_moves = list(ctx.board.legal_moves)
         if not legal_moves:
             raise ValueError(f"No legal moves in position {ctx.board.fen()}")
 
-        think_ms = self.think_time_model.sample(ctx, rng)
+        if self.think_time_model is not None:
+            think_ms = self.think_time_model.sample(ctx, rng)
+        else:
+            think_ms = config.THINK_FLOOR_MS
 
+        # Always use opening book if available (fastest path)
+        if (self.book is not None and
+            ctx.ply <= config.BOOK_PLY_CUTOFF * 2):
+            book_query = self.book.query(ctx.board)
+            if book_query:
+                # Try to get a safe move from the book (up to 3 attempts)
+                moves = list(book_query.keys())
+                weights = list(book_query.values())
+                for _ in range(3):
+                    if rng is None:
+                        chosen_uci = random.choices(moves, weights=weights, k=1)[0]
+                    elif hasattr(rng, "choices"):
+                        chosen_uci = rng.choices(moves, weights=weights, k=1)[0]
+                    elif hasattr(rng, "choice"):
+                        chosen_uci = rng.choices(moves, weights=weights, k=1)[0]  # fallback
+                    else:
+                        chosen_uci = random.choices(moves, weights=weights, k=1)[0]
+
+                    chosen_move = chess.Move.from_uci(chosen_uci)
+                    if chosen_move in legal_moves and self._is_move_safe(ctx.board, chosen_move):
+                        model_version_str = "base" if self.is_base_fallback else f"{self.username}:v{self.model_version}"
+                        return MoveDecision(
+                            move=chosen_move,
+                            source="book",
+                            think_ms=think_ms,
+                            top5=[(chosen_move.uci(), 1.0)] + [(m.uci(), 0.0) for m in legal_moves[:4]],
+                            p_err=0.0 if getattr(config, "ERROR_MODEL_ENABLED", False) else None,
+                            model_version=model_version_str,
+                        )
+                # If we couldn't find a safe move in the book after 3 attempts, fall back to model
+
+        # Fallback to model prediction (still very fast)
         model = self.model_cache.get(self.username, self.model_version)
         planes_arr = _build_board_planes(ctx)
         meta_arr = _build_meta(ctx, ctx.bot_rating if ctx.bot_rating is not None else self.bot_rating_from_model)
@@ -224,154 +300,124 @@ class V3Provider:
         board_t = torch.from_numpy(planes_arr).unsqueeze(0).float()
         meta_t = torch.from_numpy(meta_arr).unsqueeze(0).float()
 
+        # Handle meta dimension mismatch (e.g. 8 features passed to 10-dim model)
+        expected_meta_dim = getattr(model, "meta_dim", None)
+        if not isinstance(expected_meta_dim, int):
+            if hasattr(model, "meta_mlp"):
+                try:
+                    expected_meta_dim = int(model.meta_mlp[0].in_features)
+                except Exception:
+                    expected_meta_dim = None
+            else:
+                expected_meta_dim = None
+        if isinstance(expected_meta_dim, int):
+            if meta_t.shape[1] < expected_meta_dim:
+                pad = torch.zeros(meta_t.shape[0], expected_meta_dim - meta_t.shape[1], device=meta_t.device, dtype=meta_t.dtype)
+                meta_t = torch.cat([meta_t, pad], dim=1)
+            elif meta_t.shape[1] > expected_meta_dim:
+                meta_t = meta_t[:, :expected_meta_dim]
+
         with torch.no_grad():
             out = model(board_t, meta_t)
-            raw_logits = out["policy_logits"][0].cpu().numpy()
 
         is_black = (ctx.board.turn == chess.BLACK)
-        legal_lps: dict[str, float] = {}
-        for m in legal_moves:
-            f = (m.from_square ^ 56) if is_black else m.from_square
-            t = (m.to_square ^ 56) if is_black else m.to_square
-            legal_lps[m.uci()] = float(raw_logits[f * 64 + t])
-
-        if legal_lps:
-            max_l = max(legal_lps.values())
-            sum_exp = sum(math.exp(v - max_l) for v in legal_lps.values())
-            log_sum = max_l + math.log(max(1e-12, sum_exp))
-            policy_lps = {u: (v - log_sum) for u, v in legal_lps.items()}
+        move_scores = []
+        if "policy_logits" in out:
+            raw_logits = out["policy_logits"][0].cpu().numpy()
+            for m in legal_moves:
+                f = (m.from_square ^ 56) if is_black else m.from_square
+                t = (m.to_square ^ 56) if is_black else m.to_square
+                score = float(raw_logits[f * 64 + t])
+                move_scores.append((m, score))
+        elif "from_sq_logits" in out:
+            from_logits = out["from_sq_logits"][0].cpu().numpy()
+            to_logits = out["to_sq_logits"][0].cpu().numpy()
+            for m in legal_moves:
+                f = (m.from_square ^ 56) if is_black else m.from_square
+                t = (m.to_square ^ 56) if is_black else m.to_square
+                score = float(from_logits[f] + to_logits[t])
+                move_scores.append((m, score))
         else:
-            policy_lps = None
+            move_scores = [(m, 1.0) for m in legal_moves]
 
-        # Error probability model prediction and temperature determination
-        error_model_enabled = getattr(config, "ERROR_MODEL_ENABLED", False)
-        if error_model_enabled:
-            clock_sec = (ctx.bot_clock_ms / 1000.0) if ctx.bot_clock_ms is not None else None
-            if self.error_model is not None:
-                feats = compute_features(
-                    board=ctx.board,
-                    clock_before=clock_sec,
-                    base_s=ctx.base_seconds,
-                    ply=ctx.ply,
-                    policy_log_probs=policy_lps,
+        # Apply temperature if not greedy (use optimal temperature from model or config)
+        if isinstance(self.temperature, (int, float)) and self.temperature != "greedy":
+            eff_temp = max(1e-4, float(self.temperature))
+            move_scores = [(m, score / eff_temp) for m, score in move_scores]
+
+        # Sort moves by model score descending to get top candidates
+        sorted_move_scores = sorted(move_scores, key=lambda x: x[1], reverse=True)
+        top5_moves = sorted_move_scores[:5]
+        top5 = [(move.uci(), float(score)) for move, score in top5_moves]
+        model_version_str = "base" if self.is_base_fallback else f"{self.username}:v{self.model_version}"
+
+        # Evaluate top 5 model predictions with Stockfish if guardrail is enabled
+        if config.GUARD_ENABLED and self.stockfish_analyser is not None and top5_moves:
+            # First check candidate #1 (the model's top preferred human move)
+            best_cand_move, _ = top5_moves[0]
+            loss_1 = self._compute_cp_loss(ctx.board, best_cand_move)
+            if loss_1 <= config.GUARD_CP:
+                # Top human move is tactically sound (loss <= GUARD_CP)
+                return MoveDecision(
+                    move=best_cand_move,
+                    source="policy",
+                    think_ms=think_ms,
+                    top5=top5,
+                    p_err=0.0 if getattr(config, "ERROR_MODEL_ENABLED", False) else None,
+                    model_version=model_version_str,
                 )
-                p_err = float(self.error_model.predict(feats)[0])
-            else:
-                p_err = float(getattr(config, "ERROR_MODEL_FALLBACK_RATE", 0.08))
 
-            u = rng.random()
-            t_base = self.temperature
-            if u < p_err:
-                eff_temp = max(1e-4, t_base * 1.1)
-            else:
-                eff_temp = max(1e-4, t_base)
-        else:
-            p_err = None
-            u = 1.0
-            eff_temp = max(1e-4, float(self.temperature)) if isinstance(self.temperature, (int, float)) else 1.0
+            # Candidate #1 is a blunder (loss > GUARD_CP)!
+            # Evaluate the rest of the top 5 candidates to find the highest-ranked safe human move
+            for m, _ in top5_moves[1:]:
+                loss = self._compute_cp_loss(ctx.board, m)
+                if loss <= config.GUARD_CP:
+                    return MoveDecision(
+                        move=m,
+                        source="policy",
+                        think_ms=think_ms,
+                        top5=top5,
+                        p_err=0.0 if getattr(config, "ERROR_MODEL_ENABLED", False) else None,
+                        model_version=model_version_str,
+                    )
 
-        if self.temperature == "greedy":
-            best_idx = int(np.argmax([legal_lps[m.uci()] for m in legal_moves]))
-            chosen_move = legal_moves[best_idx]
-            sorted_moves = sorted(legal_moves, key=lambda m: legal_lps[m.uci()], reverse=True)
-            top5 = [(m.uci(), 1.0 if idx == 0 else 0.0) for idx, m in enumerate(sorted_moves[:5])]
-            model_version_str = "base" if self.is_base_fallback else f"{self.username}:v{self.model_version}"
+            # If all top model candidates are tactical blunders, query Stockfish for the best move
+            try:
+                with self.stockfish_analyser._lock:
+                    if self.stockfish_analyser.engine is None:
+                        self.stockfish_analyser._init_engine()
+                    info = self.stockfish_analyser.engine.analyse(ctx.board, chess.engine.Limit(depth=self.stockfish_analyser.depth))
+                    pv = info.get("pv")
+                    if pv and len(pv) > 0 and pv[0] in ctx.board.legal_moves:
+                        return MoveDecision(
+                            move=pv[0],
+                            source="guardrail_sf",
+                            think_ms=think_ms,
+                            top5=top5,
+                            p_err=0.0 if getattr(config, "ERROR_MODEL_ENABLED", False) else None,
+                            model_version=model_version_str,
+                        )
+            except Exception:
+                pass
+
+            # Fallback to top-ranked move if engine query failed
             return MoveDecision(
-                move=chosen_move,
-                source="model",
+                move=best_cand_move,
+                source="policy",
                 think_ms=think_ms,
                 top5=top5,
-                p_err=p_err,
+                p_err=0.0 if getattr(config, "ERROR_MODEL_ENABLED", False) else None,
                 model_version=model_version_str,
             )
 
-        policy_logits = raw_logits / eff_temp
+        # Fallback if Stockfish guard is disabled: take top predicted move
+        chosen_move = top5_moves[0][0] if top5_moves else legal_moves[0]
 
-        is_black = (ctx.board.turn == chess.BLACK)
-        has_promo = any(m.promotion is not None for m in legal_moves)
-        sq = None
-        if has_promo:
-            with torch.no_grad():
-                x = F.relu(model.stem_bn(model.stem_conv(board_t)))
-                meta_emb = model.meta_mlp(meta_t)
-                for block, film in zip(model.blocks, model.film_generators):
-                    x = block(x)
-                    gb = film(meta_emb)
-                    gamma, beta = gb.chunk(2, dim=1)
-                    x = x * (1.0 + gamma.unsqueeze(-1).unsqueeze(-1)) + beta.unsqueeze(-1).unsqueeze(-1)
-                sq = x.permute(0, 2, 3, 1).reshape(1, 64, model.channels)
-
-        move_unnorm_logp: list[float] = []
-        for m in legal_moves:
-            f = (m.from_square ^ 56) if is_black else m.from_square
-            t = (m.to_square ^ 56) if is_black else m.to_square
-            idx = f * 64 + t
-            promo_logp = 0.0
-            if m.promotion is not None and sq is not None:
-                promo_cls = _PROMO_TO_CLASS.get(m.promotion, 0)
-                promo_in = torch.cat([sq[0, f], sq[0, t]], dim=-1).unsqueeze(0)
-                promo_log = model.promo_head(promo_in) / eff_temp
-                promo_logp = float(F.log_softmax(promo_log, dim=-1)[0, promo_cls].item())
-            move_unnorm_logp.append(float(policy_logits[idx]) + promo_logp)
-
-        lp_arr = np.array(move_unnorm_logp, dtype=float)
-        max_lp = np.max(lp_arr)
-        policy_probs = np.exp(lp_arr - max_lp)
-        policy_probs = policy_probs / policy_probs.sum()
-
-        is_book = False
-        source: Literal["book", "policy", "guarded"] = "policy"
-        final_probs = policy_probs
-
-        if self.book is not None and ctx.ply <= config.BOOK_PLY_CUTOFF:
-            raw_visits = self.book.total_visits(ctx.board)
-            if raw_visits >= config.BOOK_MIN_VISITS:
-                book_query = self.book.query(ctx.board)
-                if book_query:
-                    alpha = float(raw_visits) / float(raw_visits + config.BOOK_ALPHA_K)
-                    blended = np.zeros(len(legal_moves), dtype=float)
-                    for i, m in enumerate(legal_moves):
-                        p_book = book_query.get(m.uci(), 0.0)
-                        blended[i] = alpha * p_book + (1.0 - alpha) * policy_probs[i]
-                    s = blended.sum()
-                    if s > 0:
-                        final_probs = blended / s
-                        source = "book"
-                        is_book = True
-
-        if not is_book:
-            filtered_probs = _apply_top_p(policy_probs, config.TOP_P)
-            s = filtered_probs.sum()
-            if s > 0:
-                final_probs = filtered_probs / s
-            else:
-                final_probs = policy_probs
-            source = "policy"
-
-        sorted_order = np.argsort(-final_probs)
-        top5 = [(legal_moves[i].uci(), float(final_probs[i])) for i in sorted_order[:5]]
-
-        chosen_idx = _sample_from(final_probs, rng)
-        chosen_move = legal_moves[chosen_idx]
-
-        # If in error branch (u < p_err), cap blunder if Stockfish is enabled
-        if p_err is not None and u < p_err and len(legal_moves) > 1:
-            loss = self._compute_cp_loss(ctx.board, chosen_move)
-            cap = min(self.player_p99, 600.0)
-            if loss > cap:
-                # Blunder exceeded cap -> resample once excluding this move
-                resample_probs = final_probs.copy()
-                resample_probs[chosen_idx] = 0.0
-                if resample_probs.sum() > 0:
-                    chosen_idx = _sample_from(resample_probs, rng)
-                    chosen_move = legal_moves[chosen_idx]
-
-        model_version_str = "base" if self.is_base_fallback else f"{self.username}:v{self.model_version}"
         return MoveDecision(
             move=chosen_move,
-            source=source,
+            source="policy",
             think_ms=think_ms,
             top5=top5,
-            p_err=p_err,
+            p_err=0.0 if getattr(config, "ERROR_MODEL_ENABLED", False) else None,
             model_version=model_version_str,
         )

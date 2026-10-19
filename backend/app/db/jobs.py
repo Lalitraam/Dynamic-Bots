@@ -67,3 +67,90 @@ def list_jobs_for_user(user_id: int, conn: sqlite3.Connection | None = None) -> 
     finally:
         if close_after:
             conn.close()
+
+
+def claim_next_job(conn: sqlite3.Connection | None = None) -> dict[str, Any] | None:
+    """Atomically pick oldest queued job, set to 'running', return it."""
+    close_after = False
+    if conn is None:
+        conn = get_db()
+        close_after = True
+    try:
+        cur = conn.execute(
+            """
+            UPDATE jobs SET status = 'running', started_at = CURRENT_TIMESTAMP
+            WHERE id = (
+                SELECT id FROM jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1
+            ) AND status = 'queued'
+            RETURNING *;
+            """
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    finally:
+        if close_after:
+            conn.close()
+
+
+def update_job(
+    conn: sqlite3.Connection | None = None,
+    job_id: int = 0,
+    status: str | None = None,
+    step: str | None = None,
+    progress: float | None = None,
+    error: str | None = None,
+) -> None:
+    """Update specific fields of a job."""
+    close_after = False
+    if conn is None:
+        conn = get_db()
+        close_after = True
+    try:
+        updates = []
+        params = []
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+            if status in ("completed", "failed"):
+                updates.append("finished_at = CURRENT_TIMESTAMP")
+        if step is not None:
+            updates.append("step = ?")
+            params.append(step)
+        if progress is not None:
+            updates.append("progress = ?")
+            params.append(progress)
+        if error is not None:
+            updates.append("error = ?")
+            params.append(error)
+
+        if updates:
+            params.append(job_id)
+            query = f"UPDATE jobs SET {', '.join(updates)} WHERE id = ?;"
+            conn.execute(query, tuple(params))
+            conn.commit()
+    finally:
+        if close_after:
+            conn.close()
+
+
+def update_player(
+    conn: sqlite3.Connection | None = None,
+    username: str = "",
+    status: str = "ready",
+    error: str | None = None,
+) -> None:
+    """Update player status (queued, building, ready, failed)."""
+    close_after = False
+    if conn is None:
+        conn = get_db()
+        close_after = True
+    try:
+        conn.execute(
+            "UPDATE players SET status = ?, error = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?;",
+            (status, error, username),
+        )
+        conn.commit()
+    finally:
+        if close_after:
+            conn.close()

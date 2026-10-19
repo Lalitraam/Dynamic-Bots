@@ -220,9 +220,86 @@ def test_websocket_flow(monkeypatch: pytest.MonkeyPatch):
         assert snap3["result"] == "0-1"
         assert snap3["termination"] == "resignation"
 
+        # Send ping after resignation
+        ws.send_json({"t": "ping"})
+        pong = ws.receive_json()
+        assert pong["t"] == "pong"
+
 
 def test_think_time_model_default_init():
     from app.engine.think_time import ThinkTimeModel
     t = ThinkTimeModel()
     assert t.buckets == {}
+
+
+def test_think_time_model_aggressive_cap():
+    import random
+    import chess
+    from app import config
+    from app.engine.provider import MoveContext
+    from app.engine.think_time import ThinkTimeModel
+
+    key = ("blitz", "opening", ">0.3", False)
+    # 30 samples of 20 seconds
+    model = ThinkTimeModel({key: [20.0] * 30})
+    board = chess.Board()
+
+    # Case 1: Blitz - Bot clock 60s (60,000ms) -> 2% is 1,200ms. Sample 20,000ms capped to 1,200ms
+    ctx1 = MoveContext(
+        board=board,
+        prev_moves=[],
+        bot_rating=1500,
+        opp_rating=1500,
+        base_seconds=180,
+        increment_seconds=0,
+        bot_clock_ms=60000,
+        opp_clock_ms=60000,
+        ply=2,
+    )
+    rng = random.Random(42)
+    assert model.sample(ctx1, rng) == 1200
+
+    # Case 2: Rapid - Bot clock 120s (120,000ms) -> 5% is 6,000ms. Sample 16,000ms capped to 6,000ms
+    ctx_rapid = MoveContext(
+        board=board,
+        prev_moves=[],
+        bot_rating=1500,
+        opp_rating=1500,
+        base_seconds=600,
+        increment_seconds=0,
+        bot_clock_ms=120000,
+        opp_clock_ms=120000,
+        ply=2,
+    )
+    model_rapid = ThinkTimeModel({("rapid", "opening", ">0.3", False): [16.0] * 30})
+    assert model_rapid.sample(ctx_rapid, rng) == 6000
+
+    # Case 3: Rapid - Bot clock 600s (600,000ms) -> 5% is 30,000ms, capped to 10,000ms
+    ctx2 = MoveContext(
+        board=board,
+        prev_moves=[],
+        bot_rating=1500,
+        opp_rating=1500,
+        base_seconds=600,
+        increment_seconds=0,
+        bot_clock_ms=600000,
+        opp_clock_ms=600000,
+        ply=2,
+    )
+    assert model.sample(ctx2, rng) == 10000
+
+    # Case 4: Low clock (1,000ms) -> 2% is 20ms, clamped to THINK_FLOOR_MS (150ms)
+    ctx3 = MoveContext(
+        board=board,
+        prev_moves=[],
+        bot_rating=1500,
+        opp_rating=1500,
+        base_seconds=180,
+        increment_seconds=0,
+        bot_clock_ms=1000,
+        opp_clock_ms=1000,
+        ply=2,
+    )
+    assert model.sample(ctx3, rng) == config.THINK_FLOOR_MS
+
 

@@ -9,6 +9,8 @@ import chess.engine
 from app import config
 
 
+import threading
+
 class StockfishAnalyser:
     """Wrapper around python-chess engine module for position evaluation."""
 
@@ -17,6 +19,7 @@ class StockfishAnalyser:
         path: Path | str | None = None,
         depth: int | None = None,
     ):
+        self._lock = threading.Lock()
         self.engine: chess.engine.SimpleEngine | None = None
         target_path = Path(path) if path is not None else Path(config.STOCKFISH_PATH)
         if not target_path.exists():
@@ -25,7 +28,9 @@ class StockfishAnalyser:
             )
         self.path = target_path
         self.depth = depth if depth is not None else getattr(config, "STOCKFISH_DEPTH", 12)
+        self._init_engine()
 
+    def _init_engine(self) -> None:
         try:
             self.engine = chess.engine.SimpleEngine.popen_uci(str(self.path))
             threads = getattr(config, "STOCKFISH_THREADS", 1)
@@ -43,34 +48,38 @@ class StockfishAnalyser:
         mate_in is string representing distance to mate or None.
         Exceptions close the engine and raise a RuntimeError.
         """
-        if self.engine is None:
-            raise RuntimeError("StockfishAnalyser engine is closed.")
-
         if board.is_checkmate():
             # If White's turn and checkmate, Black won: White is -15000
             eval_cp = -15000.0 if board.turn == chess.WHITE else 15000.0
             return eval_cp, "0"
 
-        try:
-            info = self.engine.analyse(board, chess.engine.Limit(depth=self.depth))
-            score: chess.engine.PovScore = info["score"]
-            pov_white = score.white()
+        with self._lock:
+            if self.engine is None:
+                try:
+                    self._init_engine()
+                except Exception as e:
+                    raise RuntimeError("StockfishAnalyser engine is closed and could not be restarted.") from e
 
-            if pov_white.is_mate():
-                mate_val = pov_white.mate()
-                eval_cp = 15000.0 if (mate_val is not None and mate_val > 0) else -15000.0
-                mate_in = str(abs(mate_val)) if mate_val is not None else "1"
-                return eval_cp, mate_in
-            else:
-                cp = pov_white.score()
-                if cp is None:
-                    rel = score.relative.score() or 0
-                    cp = rel if board.turn == chess.WHITE else -rel
-                eval_cp = float(max(-1500.0, min(1500.0, float(cp))))
-                return eval_cp, None
-        except Exception as e:
-            self.close()
-            raise RuntimeError(f"Stockfish analysis failed: {e}") from e
+            try:
+                info = self.engine.analyse(board, chess.engine.Limit(depth=self.depth))
+                score: chess.engine.PovScore = info["score"]
+                pov_white = score.white()
+
+                if pov_white.is_mate():
+                    mate_val = pov_white.mate()
+                    eval_cp = 15000.0 if (mate_val is not None and mate_val > 0) else -15000.0
+                    mate_in = str(abs(mate_val)) if mate_val is not None else "1"
+                    return eval_cp, mate_in
+                else:
+                    cp = pov_white.score()
+                    if cp is None:
+                        rel = score.relative.score() or 0
+                        cp = rel if board.turn == chess.WHITE else -rel
+                    eval_cp = float(max(-1500.0, min(1500.0, float(cp))))
+                    return eval_cp, None
+            except Exception as e:
+                self.close()
+                raise RuntimeError(f"Stockfish analysis failed: {e}") from e
 
     def close(self):
         """Shut down the UCI engine process."""

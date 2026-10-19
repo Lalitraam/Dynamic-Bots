@@ -37,6 +37,19 @@ scratch/
 # Project summary notes and task scratch
 [Pp][Rr][Oo][Jj][Ee][Cc][Tt]-[Ss][Uu][Mm][Mm][Aa][Rr][Yy]*.md
 [Pp][Rr][Oo][Jj][Ee][Cc][Tt]_[Ss][Uu][Mm][Mm][Aa][Rr][Yy]*.md
+backend/*_SUMMARY*.md
+backend/*_VERIFICATION*.md
+backend/DELAY_ANALYSIS.md
+backend/README_FAST_BOT.md
+backend/README_FINAL.md
+backend/TASK_COMPLETION_SUMMARY.md
+backend/GUARDRAIL_SUMMARY.md
+backend/SUMMARY.md
+
+# Debug and scratch test scripts in backend root
+backend/debug_*.py
+backend/test_*.py
+backend/tests/
 
 # Large player data artifacts, parquet tables, raw jsonl, and model weights
 data/
@@ -53,3 +66,8 @@ backend/data/
 *.log
 .env
 .env.local
+.env.*.local
+*.env
+!*.env.example
+!backend/.env.example
+

@@ -27,6 +27,21 @@ def hash_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
+def get_board_termination(board: chess.Board) -> str:
+    """Determine specific game termination string from python-chess board."""
+    if board.is_checkmate():
+        return "checkmate"
+    elif board.is_stalemate():
+        return "stalemate"
+    elif board.is_insufficient_material():
+        return "insufficient material"
+    elif board.is_fivefold_repetition() or board.can_claim_threefold_repetition():
+        return "threefold repetition"
+    elif board.is_seventyfive_moves() or board.can_claim_fifty_moves():
+        return "50-move rule"
+    return "normal"
+
+
 class GameManager:
     """In-memory active games manager with concurrency locks and V3Provider integration."""
 
@@ -37,6 +52,7 @@ class GameManager:
         self.subscribers: dict[str, set[Any]] = {}  # game_id -> set of WebSocket connections
         self.provider_cache = ModelCache(capacity=getattr(config, "MODEL_CACHE_SIZE", 8), data_root=self.data_root)
         self._stockfish: StockfishAnalyser | None = None
+        self._think_time_models: dict[str, ThinkTimeModel] = {}
 
     def _get_player_rating(self, username: str) -> int:
         return get_player_median_rating(username)
@@ -53,16 +69,22 @@ class GameManager:
         return None
 
     def _get_think_time_model(self, username: str) -> ThinkTimeModel:
+        if username in self._think_time_models:
+            return self._think_time_models[username]
         player_dir = self.data_root / "players" / username
         samples_path = player_dir / "samples_v3.parquet"
         if not samples_path.exists():
             samples_path = player_dir / "samples.parquet"
         if samples_path.exists():
             try:
-                return ThinkTimeModel.from_parquet(samples_path)
+                model = ThinkTimeModel.from_parquet(samples_path)
+                self._think_time_models[username] = model
+                return model
             except Exception:
                 pass
-        return ThinkTimeModel()
+        model = ThinkTimeModel()
+        self._think_time_models[username] = model
+        return model
 
     def get_lock(self, game_id: str) -> asyncio.Lock:
         if game_id not in self.locks:
@@ -119,6 +141,7 @@ class GameManager:
                 data_root=self.data_root,
                 stockfish_analyser=stockfish,
             )
+            game_state.provider = provider
             bot_rating = self._get_player_rating(player_username)
             ctx = MoveContext(
                 board=game_state.board,
@@ -135,16 +158,43 @@ class GameManager:
             t0 = time.perf_counter()
             decision = await asyncio.to_thread(provider.decide, ctx, rng)
             infer_ms = (time.perf_counter() - t0) * 1000.0
+            print(f"[ENGINE_TIMING] Bot played {decision.move.uci()} in {infer_ms:.2f} ms", flush=True)
 
             san_str = game_state.board.san(decision.move)
-            game_state.clock.on_move("white", cur_now)
+
+            # Dynamic think time:
+            # - When clock <= 5s: turn off think model, instant moves in milliseconds so bot never flags.
+            # - When 5s < clock < 25s: faster scramble pacing (0.3s - 1.2s).
+            # - When clock >= 25s: add 0.5s baseline, smooth out 50ms oscillations to 1.5s - 3.5s human pacing.
+            bot_clock_ms = game_state.clock.remaining_ms["white"]
+            wait_s = 0.0
+            if bot_clock_ms <= 5000:
+                wait_s = 0.0
+            elif bot_clock_ms < 25000:
+                raw_wait = decision.think_ms / 1000.0
+                max_safe_wait = min(1.2, max(0.2, (bot_clock_ms - 5000) / 1000.0 * 0.06))
+                wait_s = min(max(0.3, raw_wait), max_safe_wait)
+            else:
+                raw_wait = decision.think_ms / 1000.0
+                is_forced = ctx.board.legal_moves.count() == 1
+                base_wait = 0.4 if is_forced else 1.5
+                smoothed_wait = max(base_wait, raw_wait + 0.5)
+                max_safe_wait = min(3.5, (bot_clock_ms - 5000) / 1000.0 * 0.08)
+                wait_s = min(smoothed_wait, max_safe_wait)
+
+            if wait_s > 0.05:
+                await asyncio.sleep(wait_s)
+
+            elapsed_total_s = (infer_ms / 1000.0) + wait_s
+            bot_now = cur_now + elapsed_total_s if now is not None else time.time()
+            game_state.clock.on_move("white", bot_now)
             move_dict = {
                 "ply": 1,
                 "uci": decision.move.uci(),
                 "san": san_str,
                 "by": "bot",
                 "clock_after_ms": game_state.clock.remaining_ms["white"],
-                "elapsed_ms": int(decision.think_ms),
+                "elapsed_ms": int(elapsed_total_s * 1000),
             }
             game_state.moves.append(move_dict)
             game_state.board.push(decision.move)
@@ -288,7 +338,7 @@ class GameManager:
             if game_state.board.is_game_over():
                 game_state.status = "completed"
                 game_state.result = game_state.board.result()
-                game_state.termination = "normal"
+                game_state.termination = get_board_termination(game_state.board)
                 db_update_game(
                     game_id,
                     status=game_state.status,
@@ -299,16 +349,18 @@ class GameManager:
 
             # 7. Bot counter-move
             bot_ply = human_ply + 1
-            stockfish = self._get_stockfish_analyser()
-            provider = V3Provider(
-                username=game_state.player_username,
-                model_version=1,
-                model_cache=self.provider_cache,
-                think_time_model=self._get_think_time_model(game_state.player_username),
-                temperature=config.OPTIMAL_T_BASE,
-                data_root=self.data_root,
-                stockfish_analyser=stockfish,
-            )
+            if not hasattr(game_state, "provider") or game_state.provider is None:
+                stockfish = self._get_stockfish_analyser()
+                game_state.provider = V3Provider(
+                    username=game_state.player_username,
+                    model_version=1,
+                    model_cache=self.provider_cache,
+                    think_time_model=self._get_think_time_model(game_state.player_username),
+                    temperature=config.OPTIMAL_T_BASE,
+                    data_root=self.data_root,
+                    stockfish_analyser=stockfish,
+                )
+            provider = game_state.provider
 
             bot_rating = self._get_player_rating(game_state.player_username)
             prev_moves = [m["uci"] for m in game_state.moves[-3:]]
@@ -328,9 +380,33 @@ class GameManager:
             t0 = time.perf_counter()
             decision = await asyncio.to_thread(provider.decide, ctx, rng)
             infer_ms = (time.perf_counter() - t0) * 1000.0
+            print(f"[ENGINE_TIMING] Bot played {decision.move.uci()} in {infer_ms:.2f} ms", flush=True)
 
-            # Clock deduction for bot
-            bot_now = cur_now + (decision.think_ms / 1000.0)
+            # Dynamic think time:
+            # - When clock <= 5s: turn off think model, instant moves in milliseconds so bot never flags.
+            # - When 5s < clock < 25s: faster scramble pacing (0.3s - 1.2s).
+            # - When clock >= 25s: add 0.5s baseline, smooth out 50ms oscillations to 1.5s - 3.5s human pacing.
+            bot_clock_ms = game_state.clock.remaining_ms[game_state.bot_color]
+            wait_s = 0.0
+            if bot_clock_ms <= 5000:
+                wait_s = 0.0
+            elif bot_clock_ms < 25000:
+                raw_wait = decision.think_ms / 1000.0
+                max_safe_wait = min(1.2, max(0.2, (bot_clock_ms - 5000) / 1000.0 * 0.06))
+                wait_s = min(max(0.3, raw_wait), max_safe_wait)
+            else:
+                raw_wait = decision.think_ms / 1000.0
+                is_forced = ctx.board.legal_moves.count() == 1
+                base_wait = 0.4 if is_forced else 1.5
+                smoothed_wait = max(base_wait, raw_wait + 0.5)
+                max_safe_wait = min(3.5, (bot_clock_ms - 5000) / 1000.0 * 0.08)
+                wait_s = min(smoothed_wait, max_safe_wait)
+
+            if wait_s > 0.05:
+                await asyncio.sleep(wait_s)
+
+            elapsed_total_s = (infer_ms / 1000.0) + wait_s
+            bot_now = cur_now + elapsed_total_s if now is not None else time.time()
             bot_ok = game_state.clock.on_move(game_state.bot_color, bot_now)
             if not bot_ok:
                 game_state.status = "completed"
@@ -351,7 +427,7 @@ class GameManager:
                 "san": bot_san,
                 "by": "bot",
                 "clock_after_ms": game_state.clock.remaining_ms[game_state.bot_color],
-                "elapsed_ms": int(decision.think_ms),
+                "elapsed_ms": int(elapsed_total_s * 1000),
             }
             game_state.moves.append(bot_rec)
             game_state.board.push(decision.move)
@@ -380,7 +456,7 @@ class GameManager:
             if game_state.board.is_game_over():
                 game_state.status = "completed"
                 game_state.result = game_state.board.result()
-                game_state.termination = "normal"
+                game_state.termination = get_board_termination(game_state.board)
                 db_update_game(
                     game_id,
                     status=game_state.status,

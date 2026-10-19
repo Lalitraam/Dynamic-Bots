@@ -5,12 +5,15 @@ import { NORECT_LOGO, ICON_SVG, svgToUri } from '../utils/logo';
 
 export const Auth: React.FC = () => {
   const navigate = useNavigate();
-  const { login, register, verifyEmail } = useAuth();
+  const { login, register, sendOtp, verifyEmail } = useAuth();
 
   const [mode, setMode] = useState<'login' | 'signup' | 'verify'>('login');
+  const [loginMethod, setLoginMethod] = useState<'password' | 'otp'>('password');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [otpCode, setOtpCode] = useState('');
+  const [devOtp, setDevOtp] = useState<string | null>(null);
+  const [resendCooldown, setResendCooldown] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
   const [strength, setStrength] = useState(0);
   const [msg, setMsg] = useState<{ text: string; isError: boolean } | null>(null);
@@ -21,19 +24,14 @@ export const Auth: React.FC = () => {
   const glowRef = useRef<HTMLDivElement | null>(null);
   const dotRef = useRef<HTMLDivElement | null>(null);
 
-  // Check URL query parameters for OAuth token or error on mount
+  // Resend cooldown timer
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('token');
-    const err = params.get('error');
-    if (token) {
-      localStorage.setItem('token', token);
-      localStorage.setItem('dg_token', token);
-      window.location.href = '/home';
-    } else if (err) {
-      setMsg({ text: 'Google login failed. Try again.', isError: true });
-    }
-  }, []);
+    if (resendCooldown <= 0) return;
+    const t = setInterval(() => {
+      setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [resendCooldown]);
 
   // Parallax on mirror & cursor glow
   useEffect(() => {
@@ -151,6 +149,36 @@ export const Auth: React.FC = () => {
     setStrength(s);
   };
 
+  const handleSendOtp = async () => {
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      setMsg({ text: 'Please enter a valid email address first.', isError: true });
+      return;
+    }
+    setLoading(true);
+    setMsg(null);
+    try {
+      const res = await sendOtp(email);
+      setMode('verify');
+      setResendCooldown(45);
+      if (res.dev_otp) {
+        setDevOtp(res.dev_otp);
+      }
+      setMsg({
+        text: res.message || `Verification code sent to ${email}.`,
+        isError: false,
+      });
+    } catch (err: any) {
+      const detail =
+        err?.response?.data?.detail ||
+        err?.response?.data?.error ||
+        err?.message ||
+        'Failed to send verification code';
+      setMsg({ text: String(detail), isError: true });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg(null);
@@ -187,6 +215,10 @@ export const Auth: React.FC = () => {
         setMsg({ text: 'Password needs at least 8 characters.', isError: true });
         return;
       }
+    } else if (loginMethod === 'otp') {
+      // Send OTP for login
+      await handleSendOtp();
+      return;
     } else {
       if (!password) {
         setMsg({ text: 'Enter your password.', isError: true });
@@ -200,8 +232,12 @@ export const Auth: React.FC = () => {
         const res = await register(email, password);
         setMode('verify');
         setOtpCode('');
+        setResendCooldown(45);
+        if (res.dev_otp) {
+          setDevOtp(res.dev_otp);
+        }
         setMsg({
-          text: res.message || 'Enter the 6-digit code printed in the backend terminal.',
+          text: res.message || 'Verification code sent to your email.',
           isError: false,
         });
       } else {
@@ -219,8 +255,9 @@ export const Auth: React.FC = () => {
       if (status === 403 || String(detail).toLowerCase().includes('not verified')) {
         setMode('verify');
         setOtpCode('');
+        setResendCooldown(45);
         setMsg({
-          text: 'Email not verified. Please check the backend terminal for your code.',
+          text: 'Email not verified. A new 6-digit code was sent to your email.',
           isError: false,
         });
       } else {
@@ -287,17 +324,45 @@ export const Auth: React.FC = () => {
           </h1>
           <p className="text-[#8b8b8b] text-sm leading-[1.55] my-2.5 mb-6">
             {mode === 'verify'
-              ? 'Enter the 6-digit code printed in the backend terminal.'
+              ? 'Enter the 6-digit code sent to your email to complete verification.'
               : mode === 'signup'
               ? 'Join Doppelgambit and meet the engine that plays like you.'
-              : 'Pick up where you left off. Your games and analysis are waiting.'}
+              : 'Sign in to access your custom bots, training runs, and match history.'}
           </p>
+
+          {/* Login method toggle (Password vs OTP) */}
+          {mode === 'login' && (
+            <div className="flex items-center gap-2 mb-5 p-1 bg-[#121212] border border-[rgba(255,255,255,0.1)] rounded-lg">
+              <button
+                type="button"
+                onClick={() => setLoginMethod('password')}
+                className={`flex-1 py-1.5 px-3 rounded-md text-xs font-mono transition-all ${
+                  loginMethod === 'password'
+                    ? 'bg-[#222] text-white font-semibold shadow-sm'
+                    : 'text-[#8b8b8b] hover:text-white'
+                }`}
+              >
+                Password Login
+              </button>
+              <button
+                type="button"
+                onClick={() => setLoginMethod('otp')}
+                className={`flex-1 py-1.5 px-3 rounded-md text-xs font-mono transition-all ${
+                  loginMethod === 'otp'
+                    ? 'bg-[#222] text-white font-semibold shadow-sm'
+                    : 'text-[#8b8b8b] hover:text-white'
+                }`}
+              >
+                OTP Code Login
+              </button>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} noValidate>
             {mode === 'verify' ? (
               <div className="mb-4">
                 <label className="block font-mono text-xs text-[#8b8b8b] mb-1.5 uppercase">
-                  Verification Code (OTP)
+                  6-Digit Verification Code (OTP)
                 </label>
                 <input
                   type="text"
@@ -308,17 +373,39 @@ export const Auth: React.FC = () => {
                   placeholder="000000"
                   className="w-full bg-[#0b0b0b] border border-[rgba(255,255,255,0.16)] rounded px-3.5 py-3 text-center text-2xl tracking-[0.3em] font-mono text-white focus:border-white focus:shadow-[0_0_0_3px_rgba(255,255,255,0.12)] focus:outline-none transition-all"
                 />
-                <div className="flex justify-between items-center mt-2 text-xs font-mono">
+
+                {devOtp && (
+                  <div
+                    onClick={() => setOtpCode(devOtp)}
+                    className="mt-2.5 p-2 bg-blue-950/40 border border-blue-500/30 rounded text-xs font-mono text-blue-300 flex items-center justify-between cursor-pointer hover:bg-blue-900/40 transition-colors"
+                  >
+                    <span>Verification Code: <strong className="text-white tracking-wider">{devOtp}</strong></span>
+                    <span className="text-[11px] underline">Click to autofill</span>
+                  </div>
+                )}
+
+                <div className="flex justify-between items-center mt-3 text-xs font-mono">
                   <span className="text-[#666]">Sent to {email}</span>
                   <button
                     type="button"
+                    disabled={loading || resendCooldown > 0}
+                    onClick={handleSendOtp}
+                    className="text-[#2F7BFF] hover:underline bg-transparent border-0 cursor-pointer p-0 font-mono text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend code'}
+                  </button>
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-[rgba(255,255,255,0.08)] flex justify-between">
+                  <button
+                    type="button"
                     onClick={() => {
-                      setMode('signup');
+                      setMode('login');
                       setMsg(null);
                     }}
-                    className="text-[#2F7BFF] hover:underline bg-transparent border-0 cursor-pointer p-0 font-mono text-xs"
+                    className="text-xs text-[#888] hover:text-white transition-colors bg-transparent border-0 cursor-pointer font-mono"
                   >
-                    Change email
+                    ← Back to Sign In
                   </button>
                 </div>
               </div>
@@ -338,28 +425,34 @@ export const Auth: React.FC = () => {
                   />
                 </div>
 
-                <div className="mb-2">
-                  <label className="block font-mono text-xs text-[#8b8b8b] mb-1.5">
-                    Password
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      value={password}
-                      onChange={handlePasswordChange}
-                      placeholder="••••••••"
-                      autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-                      className="w-full bg-[#0b0b0b] border border-[rgba(255,255,255,0.16)] rounded px-3.5 py-3 pr-14 text-[15px] text-white focus:border-white focus:shadow-[0_0_0_3px_rgba(255,255,255,0.12)] focus:outline-none transition-all"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 bg-transparent border-0 text-[#8b8b8b] font-mono text-xs hover:text-white cursor-pointer px-1.5 py-1"
-                    >
-                      {showPassword ? 'Hide' : 'Show'}
-                    </button>
+                {mode === 'signup' || loginMethod === 'password' ? (
+                  <div className="mb-2">
+                    <label className="block font-mono text-xs text-[#8b8b8b] mb-1.5">
+                      Password
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        value={password}
+                        onChange={handlePasswordChange}
+                        placeholder="••••••••"
+                        autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                        className="w-full bg-[#0b0b0b] border border-[rgba(255,255,255,0.16)] rounded px-3.5 py-3 pr-14 text-[15px] text-white focus:border-white focus:shadow-[0_0_0_3px_rgba(255,255,255,0.12)] focus:outline-none transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 bg-transparent border-0 text-[#8b8b8b] font-mono text-xs hover:text-white cursor-pointer px-1.5 py-1"
+                      >
+                        {showPassword ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <p className="text-xs text-[#888] font-mono mb-4">
+                    We'll email you a 6-digit one-time code to log in without needing a password.
+                  </p>
+                )}
 
                 {mode === 'signup' && (
                   <>
@@ -382,14 +475,6 @@ export const Auth: React.FC = () => {
                     </span>
                   </>
                 )}
-
-                {mode === 'login' && (
-                  <div className="text-right mt-2 text-[13px]">
-                    <a href="#forgot" className="text-[#8b8b8b] hover:text-white transition-colors">
-                      Forgot password?
-                    </a>
-                  </div>
-                )}
               </>
             )}
 
@@ -404,42 +489,25 @@ export const Auth: React.FC = () => {
                 ? 'Verify code'
                 : mode === 'signup'
                 ? 'Create account'
+                : loginMethod === 'otp'
+                ? 'Send One-Time Code'
                 : 'Sign in'}
             </button>
 
             {mode !== 'verify' && (
-              <>
-                <div className="flex items-center gap-3.5 text-[#8b8b8b] font-mono text-xs my-5 before:flex-1 before:h-[1px] before:bg-[rgba(255,255,255,0.16)] after:flex-1 after:h-[1px] after:bg-[rgba(255,255,255,0.16)]">
-                  or
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const googleUrl =
-                      import.meta.env.VITE_GOOGLE_LOGIN_URL ||
-                      'http://localhost:8000/api/auth/google/login';
-                    window.location.href = googleUrl;
-                  }}
-                  className="btn ghost full"
-                >
-                  Continue with Google
-                </button>
-
-                <a
-                  href="/"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    navigate('/');
-                  }}
-                  className="block text-center mt-4 text-white text-sm hover:underline cursor-pointer"
-                >
-                  <span className="border-b border-[rgba(255,255,255,0.16)] pb-0.5 hover:border-white transition-colors">
-                    Play as guest
-                  </span>{' '}
-                  →
-                </a>
-              </>
+              <a
+                href="/"
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigate('/');
+                }}
+                className="block text-center mt-5 text-white text-sm hover:underline cursor-pointer"
+              >
+                <span className="border-b border-[rgba(255,255,255,0.16)] pb-0.5 hover:border-white transition-colors">
+                  Play as guest
+                </span>{' '}
+                →
+              </a>
             )}
 
             {msg && (

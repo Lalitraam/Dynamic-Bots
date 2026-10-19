@@ -28,6 +28,8 @@ class BotResponse(BaseModel):
     games_used: int | None = 0
     tier: str | None = "free"
     error: str | None = None
+    job_step: str | None = None
+    job_progress: float | None = None
 
 
 def check_lichess_user_exists(username: str) -> bool:
@@ -48,11 +50,18 @@ def get_user_bots(user: dict[str, Any] = Depends(get_current_user)) -> list[BotR
     try:
         rows = conn.execute(
             """
+            WITH latest_jobs AS (
+                SELECT username, step, progress, status,
+                       ROW_NUMBER() OVER(PARTITION BY username ORDER BY created_at DESC) as rn
+                FROM jobs
+            )
             SELECT ub.username, ub.added_at, ub.archived,
                    p.status, p.active_version, p.last_trained_at,
-                   p.games_used, p.tier, p.error
+                   p.games_used, p.tier, p.error,
+                   j.step AS job_step, j.progress AS job_progress
             FROM user_bots ub
             JOIN players p ON ub.username = p.username
+            LEFT JOIN latest_jobs j ON ub.username = j.username AND j.rn = 1
             WHERE ub.user_id = ?
             ORDER BY ub.added_at DESC;
             """,
@@ -70,6 +79,8 @@ def get_user_bots(user: dict[str, Any] = Depends(get_current_user)) -> list[BotR
                 games_used=r["games_used"],
                 tier=r["tier"],
                 error=r["error"],
+                job_step=r["job_step"],
+                job_progress=r["job_progress"],
             )
             for r in rows
         ]
@@ -141,11 +152,18 @@ def add_bot(req: AddBotRequest, user: dict[str, Any] = Depends(get_current_user)
         # Fetch newly added bot row
         row = conn.execute(
             """
+            WITH latest_jobs AS (
+                SELECT username, step, progress, status,
+                       ROW_NUMBER() OVER(PARTITION BY username ORDER BY created_at DESC) as rn
+                FROM jobs
+            )
             SELECT ub.username, ub.added_at, ub.archived,
                    p.status, p.active_version, p.last_trained_at,
-                   p.games_used, p.tier, p.error
+                   p.games_used, p.tier, p.error,
+                   j.step AS job_step, j.progress AS job_progress
             FROM user_bots ub
             JOIN players p ON ub.username = p.username
+            LEFT JOIN latest_jobs j ON ub.username = j.username AND j.rn = 1
             WHERE ub.user_id = ? AND ub.username = ?;
             """,
             (user["id"], raw_username),
@@ -161,6 +179,8 @@ def add_bot(req: AddBotRequest, user: dict[str, Any] = Depends(get_current_user)
             games_used=row["games_used"],
             tier=row["tier"],
             error=row["error"],
+            job_step=row["job_step"],
+            job_progress=row["job_progress"],
         )
     finally:
         conn.close()

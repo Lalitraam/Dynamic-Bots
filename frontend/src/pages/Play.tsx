@@ -1,9 +1,44 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Chessboard } from 'react-chessboard';
+import { Chessboard as BaseChessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import apiClient from '../api/client';
 import { NORECT_LOGO, svgToUri } from '../utils/logo';
+import { LightFallBackground } from '../components/LightFallBackground';
+
+const Chessboard = BaseChessboard as any;
+
+export const pieceMap: Record<string, string> = {
+  p: 'Pawn',
+  n: 'Knight',
+  b: 'Bishop',
+  r: 'Rook',
+  q: 'Queen',
+  k: 'King',
+};
+
+export const formatMove = (game: any, move: any): string => {
+  if (!move) return '';
+  const from = move.from || (move.uci && move.uci.length >= 4 ? move.uci.slice(0, 2) : undefined);
+  const to = move.to || (move.uci && move.uci.length >= 4 ? move.uci.slice(2, 4) : '');
+  const piece = game && from ? game.get(from) : null;
+  if (!piece) return move.san || 'Move';
+  return `${pieceMap[piece.type] || piece.type} ${to || move.to}`;
+};
+
+export const formatTerminationReason = (reason: string | null | undefined): string => {
+  if (!reason) return 'Concluded';
+  const r = reason.toLowerCase().trim();
+  if (r === 'time forfeit' || r === 'timeout') return 'Time forfeit';
+  if (r === 'checkmate') return 'Checkmate';
+  if (r === 'resignation') return 'Resignation';
+  if (r === 'stalemate') return 'Stalemate';
+  if (r === 'insufficient material') return 'Insufficient material';
+  if (r === 'threefold repetition') return 'Threefold repetition';
+  if (r === '50-move rule') return '50-move rule';
+  return reason.charAt(0).toUpperCase() + reason.slice(1);
+};
+
 
 interface MoveRecord {
   uci: string;
@@ -62,7 +97,6 @@ export const Play: React.FC = () => {
   // New Game Modal state
   const [showModal, setShowModal] = useState<boolean>(true);
   const [selectedTc, setSelectedTc] = useState(TIME_CONTROLS[4]); // 10+0
-  const [selectedStrength, setSelectedStrength] = useState<number>(2); // 1: Rookie, 2: Club, 3: Expert
   const [selectedColor, setSelectedColor] = useState<'w' | 'r' | 'b'>('w');
   const [isStartingGame, setIsStartingGame] = useState<boolean>(false);
 
@@ -73,45 +107,104 @@ export const Play: React.FC = () => {
   const [fen, setFen] = useState<string>('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
   const [moves, setMoves] = useState<MoveRecord[]>([]);
   const [clocks, setClocks] = useState<Clocks>({ white: 600000, black: 600000 });
-  const [turn, setTurn] = useState<'white' | 'black'>('white');
-  const [ply, setPly] = useState<number>(0);
+  const [ts, setTs] = useState<number>(() => performance.now());
+  const turn: 'white' | 'black' = fen.split(' ')[1] === 'w' ? 'white' : 'black';
+  const [, setPly] = useState<number>(0);
   const [gameStatus, setGameStatus] = useState<string>('in_progress');
   const [gameResult, setGameResult] = useState<string | null>(null);
   const [gameTermination, setGameTermination] = useState<string | null>(null);
   const [gameOverOverlay, setGameOverOverlay] = useState<boolean>(false);
   const [statusText, setStatusText] = useState<string>('Ready');
+  const [isWaitingForBot, setIsWaitingForBot] = useState<boolean>(false);
 
   // Move review index
   const [viewIndex, setViewIndex] = useState<number | null>(null);
+
+  // Legal move highlight state
+  const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
+  const [optionSquares, setOptionSquares] = useState<Record<string, React.CSSProperties>>({});
+
+  // Premove state (single-move queue like Lichess)
+  const [premove, setPremove] = useState<{ from: string; to: string; promotion?: string } | null>(null);
+  const premoveRef = useRef<{ from: string; to: string; promotion?: string } | null>(null);
 
   // Refs
   const wsRef = useRef<WebSocket | null>(null);
   const movesContainerRef = useRef<HTMLDivElement | null>(null);
   const boardWrapRef = useRef<HTMLDivElement | null>(null);
   const lastMovesCountRef = useRef<number>(0);
+  const isWaitingForBotRef = useRef<boolean>(false);
 
-  // Clock countdown interval
+  // Live state refs to guarantee callbacks never suffer from stale closures
+  const fenRef = useRef(fen);
+  fenRef.current = fen;
+  const movesRef = useRef(moves);
+  movesRef.current = moves;
+  const humanColorRef = useRef(humanColor);
+  humanColorRef.current = humanColor;
+  const gameStatusRef = useRef(gameStatus);
+  gameStatusRef.current = gameStatus;
+  const gameOverOverlayRef = useRef(gameOverOverlay);
+  gameOverOverlayRef.current = gameOverOverlay;
+  const viewIndexRef = useRef(viewIndex);
+  viewIndexRef.current = viewIndex;
+
+  // Live clock references for drift-free real-time ticking
+  const clocksRef = useRef<Clocks>({ white: 600000, black: 600000 });
+  clocksRef.current = clocks;
+  const turnRef = useRef<'white' | 'black'>(turn);
+  turnRef.current = turn;
+  const lastTickTimeRef = useRef<number>(performance.now());
+
+  // Real-time Lichess-style clock countdown interval
   useEffect(() => {
-    if (showModal || gameOverOverlay || gameStatus !== 'in_progress') return;
-    if (moves.length < 2 && selectedTc.base_s > 0) {
-      // Clocks only tick after first 2 plies
+    if (showModal || gameOverOverlay || (gameStatus !== 'in_progress' && gameStatus !== 'active')) {
       return;
     }
+    if (selectedTc.base_s <= 0) {
+      return; // Unlimited / casual
+    }
+
+    lastTickTimeRef.current = performance.now();
 
     const interval = setInterval(() => {
+      const now = performance.now();
+      const delta = now - lastTickTimeRef.current;
+      lastTickTimeRef.current = now;
+
+      const humanCol = humanColorRef.current;
+      const botCol = humanCol === 'white' ? 'black' : 'white';
+
+      // Active player: while waiting for bot, it is authoritatively the bot's turn
+      const currentActive = isWaitingForBotRef.current
+        ? botCol
+        : (fenRef.current.split(' ')[1] === 'w' ? 'white' : 'black');
+
+      // Never tick human's clock while waiting for the bot
+      if (isWaitingForBotRef.current && currentActive === humanCol) {
+        return;
+      }
+
+      // Move-1 rule: White does not tick before move 1
+      const movesCount = movesRef.current.length;
+      if (movesCount === 0 && currentActive === 'white') {
+        return;
+      }
+
       setClocks((prev) => {
         const next = { ...prev };
-        if (turn === 'white') {
-          next.white = Math.max(0, next.white - 100);
+        if (currentActive === 'white') {
+          next.white = Math.max(0, next.white - delta);
         } else {
-          next.black = Math.max(0, next.black - 100);
+          next.black = Math.max(0, next.black - delta);
         }
+        clocksRef.current = next;
         return next;
       });
-    }, 100);
+    }, 50);
 
     return () => clearInterval(interval);
-  }, [turn, gameStatus, moves.length, showModal, gameOverOverlay, selectedTc.base_s]);
+  }, [showModal, gameOverOverlay, gameStatus, selectedTc.base_s, ts, isWaitingForBot]);
 
   // Particle Burst on capture
   const triggerBurst = useCallback(() => {
@@ -148,16 +241,12 @@ export const Play: React.FC = () => {
 
   // Connect WebSocket when gameId and secret are established
   const connectWs = useCallback(
-    (gId: string, secret: string) => {
+    (gameId: string, secret: string) => {
       if (wsRef.current) {
         wsRef.current.close();
       }
 
-      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-      const wsProto = apiBase.startsWith('https') ? 'wss:' : 'ws:';
-      const wsHost = apiBase.replace(/^https?:\/\//, '');
-      const wsUrl = `${wsProto}//${wsHost}/ws/${gId}`;
-
+      const wsUrl = `ws://localhost:8000/ws/${gameId}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -169,13 +258,30 @@ export const Play: React.FC = () => {
         try {
           const data = JSON.parse(event.data);
           if (data.t === 'snapshot') {
+            setIsWaitingForBot(false);
+            isWaitingForBotRef.current = false;
             const snap = data as SnapshotMsg;
             setFen(snap.fen);
-            setClocks(snap.clocks);
-            setTurn(snap.turn);
+            fenRef.current = snap.fen;
+
+            if (snap.clocks) {
+              setClocks(snap.clocks);
+              clocksRef.current = { ...snap.clocks };
+              lastTickTimeRef.current = performance.now();
+              setTs(performance.now());
+            }
+
+            turnRef.current = snap.turn;
             setPly(snap.ply);
             setGameStatus(snap.status);
+            gameStatusRef.current = snap.status;
             setMoves(snap.moves || []);
+            movesRef.current = snap.moves || [];
+            if (snap.human_color) {
+              const hColor = snap.human_color.toLowerCase() === 'black' ? 'black' : 'white';
+              setHumanColor(hColor);
+              humanColorRef.current = hColor;
+            }
 
             // Check if capture occurred
             if (snap.moves && snap.moves.length > lastMovesCountRef.current) {
@@ -186,10 +292,63 @@ export const Play: React.FC = () => {
             }
             lastMovesCountRef.current = (snap.moves || []).length;
 
+            // Handle premove execution if queued
+            const pm = premoveRef.current;
+            if (pm && snap.status !== 'completed' && snap.status !== 'resigned' && !snap.result) {
+              const nextGame = new Chess(snap.fen);
+              const humanChessColor = (snap.human_color ? snap.human_color.toLowerCase() : humanColorRef.current) === 'black' ? 'b' : 'w';
+              if (nextGame.turn() === humanChessColor) {
+                let executedPremove: any = null;
+                try {
+                  executedPremove = nextGame.move({
+                    from: pm.from,
+                    to: pm.to,
+                    promotion: pm.promotion || 'q',
+                  });
+                } catch {
+                  executedPremove = null;
+                }
+
+                setPremove(null);
+                premoveRef.current = null;
+
+                if (executedPremove) {
+                  // Execute premove immediately
+                  const uci = `${pm.from}${pm.to}${executedPremove.promotion || ''}`;
+                  const nextPly = (snap.moves || []).length + 1;
+                  setFen(nextGame.fen());
+                  fenRef.current = nextGame.fen();
+                  turnRef.current = nextGame.fen().split(' ')[1] === 'w' ? 'white' : 'black';
+                  setIsWaitingForBot(true);
+                  isWaitingForBotRef.current = true;
+
+                  const humanMoveObj: MoveRecord = {
+                    uci,
+                    san: executedPremove.san,
+                    from: pm.from,
+                    to: pm.to,
+                  };
+                  setMoves((prev) => [...prev, humanMoveObj]);
+                  movesRef.current = [...movesRef.current, humanMoveObj];
+
+                  if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify({ t: 'move', uci, n: nextPly }));
+                  }
+                }
+              } else {
+                setPremove(null);
+                premoveRef.current = null;
+              }
+            }
+
             if (snap.status === 'completed' || snap.status === 'resigned' || snap.result) {
+              setGameStatus('completed');
+              gameStatusRef.current = 'completed';
               setGameResult(snap.result || null);
               setGameTermination(snap.termination || snap.status);
               setGameOverOverlay(true);
+              gameOverOverlayRef.current = true;
+              setStatusText(`Game over · ${formatTerminationReason(snap.termination || snap.status)} (${snap.result || '*'})`);
             }
 
             // Scroll moves to bottom
@@ -199,10 +358,18 @@ export const Play: React.FC = () => {
               }
             }, 50);
           } else if (data.t === 'end') {
-            setGameResult(data.result);
-            setGameTermination(data.termination);
+            setIsWaitingForBot(false);
+            isWaitingForBotRef.current = false;
+            setGameStatus('completed');
+            gameStatusRef.current = 'completed';
+            setGameResult(data.result || null);
+            setGameTermination(data.termination || 'completed');
             setGameOverOverlay(true);
+            gameOverOverlayRef.current = true;
+            setStatusText(`Game over · ${formatTerminationReason(data.termination)} (${data.result || '*'})`);
           } else if (data.t === 'error') {
+            setIsWaitingForBot(false);
+            isWaitingForBotRef.current = false;
             console.error('WS Error:', data.error);
             setStatusText(data.error);
           }
@@ -249,21 +416,36 @@ export const Play: React.FC = () => {
       });
 
       const { game_id, secret, human_color: assignedColor, fen: startFen } = res.data;
+      const initialMs = selectedTc.base_s * 1000;
+      const initialClocks = {
+        white: initialMs,
+        black: initialMs,
+      };
       setGameId(game_id);
-      setHumanColor(assignedColor === 'black' ? 'black' : 'white');
-      setFlipped(assignedColor === 'black');
+      const isBlack = assignedColor === 'black';
+      setHumanColor(isBlack ? 'black' : 'white');
+      humanColorRef.current = isBlack ? 'black' : 'white';
+      setFlipped(isBlack);
       setFen(startFen);
-      setClocks({
-        white: selectedTc.base_s * 1000,
-        black: selectedTc.base_s * 1000,
-      });
+      fenRef.current = startFen;
+      setClocks(initialClocks);
+      clocksRef.current = { ...initialClocks };
+      lastTickTimeRef.current = performance.now();
+      setTs(performance.now());
+      turnRef.current = 'white';
       setMoves([]);
+      movesRef.current = [];
       lastMovesCountRef.current = 0;
       setPly(0);
       setGameStatus('in_progress');
+      gameStatusRef.current = 'in_progress';
       setGameResult(null);
       setGameTermination(null);
       setGameOverOverlay(false);
+      gameOverOverlayRef.current = false;
+      const botPlaysFirst = isBlack;
+      setIsWaitingForBot(botPlaysFirst);
+      isWaitingForBotRef.current = botPlaysFirst;
       setShowModal(false);
       setViewIndex(null);
 
@@ -277,54 +459,273 @@ export const Play: React.FC = () => {
     }
   };
 
-  // Move submission handler from react-chessboard
-  const handlePieceDrop = ({
-    sourceSquare,
-    targetSquare,
-  }: {
-    sourceSquare: string;
-    targetSquare: string | null;
-  }): boolean => {
-    if (!targetSquare) return false;
-    if (gameStatus !== 'in_progress' || gameOverOverlay) return false;
-    if (turn !== humanColor) return false;
+  // ── Helpers ──────────────────────────────────────────────────────────────
 
-    // Validate legality using chess.js locally
+  const clearHighlights = () => {
+    setSelectedSquare(null);
+    setOptionSquares({});
+  };
+
+  /** Build a customSquareStyles map showing legal move dots/rings for a given square */
+  const getLegalSquares = (square: string): Record<string, React.CSSProperties> => {
+    const game = new Chess(fenRef.current);
+    let legalMoves: any[] = [];
     try {
-      const tempGame = new Chess(fen);
-      const possibleMoves = tempGame.moves({ verbose: true });
-      const foundMove = possibleMoves.find(
-        (m) => m.from === sourceSquare && m.to === targetSquare
-      );
+      legalMoves = game.moves({ square: square as any, verbose: true }) as any[];
+    } catch {
+      return {};
+    }
+    if (!legalMoves.length) return {};
 
-      if (!foundMove) {
-        return false;
+    const styles: Record<string, React.CSSProperties> = {
+      [square]: {
+        backgroundColor: 'rgba(255, 255, 100, 0.4)',
+        boxShadow: 'inset 0 0 0 2px rgba(255, 255, 0, 0.8)',
+      },
+    };
+
+    legalMoves.forEach((m) => {
+      const isCapture = !!game.get(m.to);
+      styles[m.to] = isCapture
+        ? {
+            background: 'radial-gradient(circle, rgba(229, 72, 77, 0.35) 75%, transparent 75%)',
+            boxShadow: 'inset 0 0 0 3px #e5484d',
+            cursor: 'pointer',
+          }
+        : {
+            background: 'radial-gradient(circle, #2F7BFF 24%, transparent 25%)',
+            cursor: 'pointer',
+          };
+    });
+    return styles;
+  };
+
+  // ── Drag eligibility check: allow dragging human player's pieces on turn or for premove ──
+  const canDragPiece = ({ piece, square }: { isSparePiece: boolean; piece: any; square: string | null }): boolean => {
+    if (!gameId || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return false;
+    if (viewIndexRef.current !== null) return false;
+    const currentStatus = gameStatusRef.current;
+    if (gameOverOverlayRef.current || (currentStatus !== 'in_progress' && currentStatus !== 'active')) {
+      return false;
+    }
+    const humanChessColor = humanColorRef.current === 'white' ? 'w' : 'b';
+
+    // Allow dragging player's pieces (either for immediate move on turn or queued premove)
+    if (square) {
+      const game = new Chess(fenRef.current);
+      const p = game.get(square as any);
+      return !!p && p.color === humanChessColor;
+    }
+    if (piece?.pieceType) {
+      return piece.pieceType.startsWith(humanChessColor);
+    }
+    return true;
+  };
+
+  // ── Move submission — react-chessboard v5: onPieceDrop({ piece, sourceSquare, targetSquare }) ──
+  const onPieceDrop = ({ sourceSquare, targetSquare }: { sourceSquare: string; targetSquare: string | null; piece: any }): boolean => {
+    clearHighlights();
+    if (!sourceSquare || !targetSquare) return false;
+    if (!gameId || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return false;
+
+    const game = new Chess(fenRef.current);
+    const humanChessColor = humanColorRef.current === 'white' ? 'w' : 'b';
+    const currentStatus = gameStatusRef.current;
+    const isGameOver = gameOverOverlayRef.current || (currentStatus !== 'in_progress' && currentStatus !== 'active') || game.isGameOver();
+    const isMyTurn = game.turn() === humanChessColor && !isWaitingForBotRef.current;
+
+    console.log('[DROP]', { sourceSquare, targetSquare, turn: game.turn(), humanChessColor, isMyTurn, isGameOver });
+
+    if (isGameOver) return false;
+
+    // PREMOVE SUPPORT: if it is the bot's turn, queue a single premove (Lichess style)
+    if (!isMyTurn) {
+      if (sourceSquare !== targetSquare) {
+        const pm = { from: sourceSquare, to: targetSquare, promotion: 'q' };
+        setPremove(pm);
+        premoveRef.current = pm;
+      }
+      return false;
+    }
+
+    // Normal move: clear any pending premove
+    setPremove(null);
+    premoveRef.current = null;
+
+    let move: any = null;
+    try {
+      move = game.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
+    } catch {
+      return false;
+    }
+    if (!move) return false;
+
+    setFen(game.fen()); // This flips the turn immediately
+    setTs(performance.now()); // Reset the tick timestamp
+    fenRef.current = game.fen();
+    lastTickTimeRef.current = performance.now();
+    turnRef.current = game.fen().split(' ')[1] === 'w' ? 'white' : 'black';
+    setIsWaitingForBot(true);
+    isWaitingForBotRef.current = true;
+
+    const humanColorVal = humanColorRef.current;
+
+    // Lichess increment rule: add increment immediately upon human move completion
+    if (selectedTc.inc_s > 0) {
+      setClocks((prev) => {
+        const next = {
+          ...prev,
+          [humanColorVal]: prev[humanColorVal] + selectedTc.inc_s * 1000,
+        };
+        clocksRef.current = next;
+        return next;
+      });
+    }
+
+    const uci = `${sourceSquare}${targetSquare}${move.promotion || ''}`;
+    const nextPly = movesRef.current.length + 1;
+
+    // Optimistically record human move in moves list
+    const humanMoveObj: MoveRecord = {
+      uci,
+      san: move.san,
+      from: sourceSquare,
+      to: targetSquare,
+    };
+    setMoves((prev) => [...prev, humanMoveObj]);
+    movesRef.current = [...movesRef.current, humanMoveObj];
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ t: 'move', uci, n: nextPly }));
+    }
+    return true;
+  };
+
+  // ── Unified square/piece selection for Click-to-Move ──
+  const handleSquareSelection = (square: string) => {
+    if (!gameId || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      clearHighlights();
+      return;
+    }
+    if (viewIndexRef.current !== null || isWaitingForBotRef.current) {
+      clearHighlights();
+      return;
+    }
+    const game = new Chess(fenRef.current);
+    const humanChessColor = humanColorRef.current === 'white' ? 'w' : 'b';
+    const currentStatus = gameStatusRef.current;
+    const isGameOver = gameOverOverlayRef.current || (currentStatus !== 'in_progress' && currentStatus !== 'active') || game.isGameOver();
+    const isMyTurn = game.turn() === humanChessColor;
+
+    if (isGameOver || !isMyTurn) {
+      clearHighlights();
+      return;
+    }
+
+    if (selectedSquare) {
+      if (selectedSquare === square) {
+        clearHighlights();
+        return;
       }
 
-      // Format UCI (e.g., e2e4 or e7e8q)
-      const uci = `${sourceSquare}${targetSquare}${foundMove.promotion || ''}`;
-
-      // Send authoritatively via WebSocket
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({
-            t: 'move',
-            uci,
-            n: ply,
-          })
-        );
+      let move: any = null;
+      try {
+        move = game.move({ from: selectedSquare, to: square, promotion: 'q' });
+      } catch {
+        move = null;
       }
 
-      // Do not update board locally; wait for server snapshot!
-      return false;
-    } catch (err) {
-      console.error('Error validating move:', err);
-      return false;
+      if (move) {
+        setFen(game.fen()); // This flips the turn immediately
+        setTs(performance.now()); // Reset the tick timestamp
+        fenRef.current = game.fen();
+        lastTickTimeRef.current = performance.now();
+        turnRef.current = game.fen().split(' ')[1] === 'w' ? 'white' : 'black';
+        setIsWaitingForBot(true);
+        isWaitingForBotRef.current = true;
+
+        const humanColorVal = humanColorRef.current;
+
+        // Lichess increment rule: add increment immediately upon human move completion
+        if (selectedTc.inc_s > 0) {
+          setClocks((prev) => {
+            const next = {
+              ...prev,
+              [humanColorVal]: prev[humanColorVal] + selectedTc.inc_s * 1000,
+            };
+            clocksRef.current = next;
+            return next;
+          });
+        }
+
+        const uci = `${selectedSquare}${square}${move.promotion || ''}`;
+        const nextPly = movesRef.current.length + 1;
+
+        // Optimistically record human move in moves list
+        const humanMoveObj: MoveRecord = {
+          uci,
+          san: move.san,
+          from: selectedSquare,
+          to: square,
+        };
+        setMoves((prev) => [...prev, humanMoveObj]);
+        movesRef.current = [...movesRef.current, humanMoveObj];
+
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ t: 'move', uci, n: nextPly }));
+        }
+        clearHighlights();
+        return;
+      }
+
+      // Check if clicking another friendly piece to switch selection
+      const pieceOnSquare = game.get(square as any);
+      if (pieceOnSquare && pieceOnSquare.color === humanChessColor) {
+        const styles = getLegalSquares(square);
+        setSelectedSquare(square);
+        setOptionSquares(styles);
+        return;
+      }
+
+      clearHighlights();
+      return;
+    }
+
+    const piece = game.get(square as any);
+    if (piece && piece.color === humanChessColor) {
+      const styles = getLegalSquares(square);
+      setSelectedSquare(square);
+      setOptionSquares(styles);
+    } else {
+      clearHighlights();
     }
   };
 
+  // ── Click-to-move — react-chessboard v5 handlers ──
+  const onSquareClick = ({ square }: { piece: any; square: string }) => {
+    handleSquareSelection(square);
+  };
+
+  const onPieceClick = ({ square }: { isSparePiece: boolean; piece: any; square: string | null }) => {
+    if (square) {
+      handleSquareSelection(square);
+    }
+  };
+
+  // ── Show legal dots on drag start — react-chessboard v5: onPieceDrag({ isSparePiece, piece, square }) ──
+  const onPieceDrag = ({ square }: { isSparePiece: boolean; piece: any; square: string | null }) => {
+    if (viewIndexRef.current !== null || isWaitingForBotRef.current || !square) return;
+    const humanChessColor = humanColorRef.current === 'white' ? 'w' : 'b';
+    const game = new Chess(fenRef.current);
+    if (game.turn() !== humanChessColor) return;
+    setSelectedSquare(square);
+    setOptionSquares(getLegalSquares(square));
+  };
+
+  const onPieceDragCancel = () => clearHighlights();
+
   const handleResign = () => {
-    if (gameStatus !== 'in_progress') return;
+    if (gameStatus !== 'in_progress' && gameStatus !== 'active') return;
     if (window.confirm('Are you sure you want to resign?')) {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ t: 'resign' }));
@@ -334,11 +735,14 @@ export const Play: React.FC = () => {
 
   const formatClock = (ms: number) => {
     if (ms <= 0) return '0:00';
-    const s = ms / 1000;
-    if (s < 10) return '0:0' + s.toFixed(1);
-    const mins = Math.floor(s / 60);
-    const secs = Math.floor(s % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+    const totalSecs = ms / 1000;
+    const mins = Math.floor(totalSecs / 60);
+    const secs = totalSecs % 60;
+    if (totalSecs < 20) {
+      const secStr = secs < 10 ? `0${secs.toFixed(1)}` : secs.toFixed(1);
+      return `${mins}:${secStr}`;
+    }
+    return `${mins}:${Math.floor(secs).toString().padStart(2, '0')}`;
   };
 
   // Move history pairs
@@ -350,25 +754,55 @@ export const Play: React.FC = () => {
     });
   }
 
+  // Pre-calculate human-readable moves & FEN snapshots using chess.js replay
+  const { formattedMoves, moveFens } = useMemo(() => {
+    const replayGame = new Chess();
+    const fens: string[] = [];
+    const formatted = moves.map((m) => {
+      const from = m.from || (m.uci && m.uci.length >= 4 ? m.uci.slice(0, 2) : '');
+      const to = m.to || (m.uci && m.uci.length >= 4 ? m.uci.slice(2, 4) : '');
+      const moveObj = { ...m, from, to };
+      const f = formatMove(replayGame, moveObj);
+      try {
+        if (from && to) {
+          replayGame.move({ from, to, promotion: m.uci?.[4] || 'q' });
+        } else if (m.san) {
+          replayGame.move(m.san);
+        }
+      } catch {
+        // fallback if move cannot be executed in replay
+      }
+      fens.push(replayGame.fen());
+      return f;
+    });
+    return { formattedMoves: formatted, moveFens: fens };
+  }, [moves]);
+
   // Display FEN (either live or historical review)
-  const displayFen = viewIndex !== null && moves[viewIndex]?.fen ? moves[viewIndex].fen! : fen;
+  const displayFen = viewIndex !== null && moveFens[viewIndex] ? moveFens[viewIndex] : fen;
 
   const currentTheme = BD_THEMES[boardTheme];
-  const isHumanTurn = turn === humanColor;
+
+  // Combine legal move dots and active premove square highlights (Lichess style)
+  const boardSquareStyles = useMemo(() => {
+    const styles: Record<string, React.CSSProperties> = { ...optionSquares };
+    if (premove) {
+      styles[premove.from] = {
+        backgroundColor: 'rgba(47, 123, 255, 0.45)',
+        boxShadow: 'inset 0 0 0 3px #2F7BFF',
+      };
+      styles[premove.to] = {
+        backgroundColor: 'rgba(47, 123, 255, 0.65)',
+        boxShadow: 'inset 0 0 0 3px #2F7BFF',
+      };
+    }
+    return styles;
+  }, [optionSquares, premove]);
 
   return (
     <div className="min-h-screen relative bg-black text-white selection:bg-blue-600 selection:text-white flex flex-col justify-between">
-      {/* Background violet window light + king shadow */}
-      <div className="fx" aria-hidden="true">
-        <div className="pool" />
-        <div className="beam">
-          <i />
-          <i className="b" />
-        </div>
-        <svg className="ks" viewBox="0 0 100 150" preserveAspectRatio="xMidYMax meet">
-          <path d="M47 2h6v7h9v6h-9v11h-6V15h-9V9h9zM30 52Q26 28 50 26Q74 28 70 52zM26 52h48v8H26zM34 60Q38 90 26 124h48Q62 90 66 60zM20 124h60v10H20zM14 134h72v12H14z" />
-        </svg>
-      </div>
+      {/* Background Light Fall graphics matching screenshot */}
+      <LightFallBackground />
 
       {/* Header */}
       <header className="relative z-20 flex justify-between items-center px-[clamp(16px,4vw,48px)] py-4 border-b border-[rgba(255,255,255,0.1)]">
@@ -449,23 +883,45 @@ export const Play: React.FC = () => {
           style={{ width: 'clamp(280px, min(calc(100vh - 220px), calc(100vw - 440px)), 580px)' }}
         >
           <div ref={boardWrapRef} className="bw relative shadow-2xl">
+            {/* Active Premove Indicator Badge */}
+            {premove && (
+              <div className="absolute top-2 left-2 z-20 bg-[#2F7BFF]/95 backdrop-blur-md text-white text-xs px-3 py-1.5 rounded shadow-lg flex items-center gap-2 font-mono border border-white/25">
+                <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                <span>Premove: <b>{premove.from}→{premove.to}</b></span>
+                <button
+                  onClick={() => { setPremove(null); premoveRef.current = null; }}
+                  className="text-white/80 hover:text-white font-bold ml-1 hover:scale-110 transition-transform"
+                  title="Cancel premove (or right-click board)"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
             <Chessboard
               options={{
+                id: 'play-board',
                 position: displayFen,
                 boardOrientation: flipped ? 'black' : 'white',
-                onPieceDrop: handlePieceDrop,
+                allowDragging: viewIndex === null,
+                canDragPiece,
+                onPieceDrop,
+                onSquareClick,
+                onSquareRightClick: () => {
+                  setPremove(null);
+                  premoveRef.current = null;
+                  clearHighlights();
+                },
+                onPieceClick,
+                onPieceDrag,
+                onPieceDragCancel,
+                squareStyles: boardSquareStyles,
                 boardStyle: {
                   borderRadius: '0px',
                   boxShadow: '0 10px 40px rgba(0,0,0,.6)',
                 },
                 darkSquareStyle: { backgroundColor: currentTheme.dk },
                 lightSquareStyle: { backgroundColor: currentTheme.lt },
-                canDragPiece: ({ piece }) => {
-                  if (gameStatus !== 'in_progress' || gameOverOverlay) return false;
-                  if (!isHumanTurn) return false;
-                  const pt = piece.pieceType || '';
-                  return humanColor === 'white' ? pt.startsWith('w') : pt.startsWith('b');
-                },
               }}
             />
 
@@ -487,7 +943,7 @@ export const Play: React.FC = () => {
                     : 'Game Drawn'}
                 </h2>
                 <p className="text-sm font-mono text-[#8b8b8b] mb-6">
-                  {gameTermination || 'Match concluded'} · {gameResult || '½-½'}
+                  {formatTerminationReason(gameTermination)} · {gameResult || '½-½'}
                 </p>
                 <div className="flex gap-3 flex-wrap justify-center">
                   <button onClick={handleStartGame} className="btn main sm">
@@ -519,18 +975,18 @@ export const Play: React.FC = () => {
             <div className="flex-1 min-w-0">
               <b className="font-head text-sm block truncate">{username} (Clone)</b>
               <small className="font-mono text-[11px] text-[#8b8b8b] block">
-                {selectedStrength === 1 ? 'Rookie' : selectedStrength === 2 ? 'Club' : 'Expert'} Engine
+                AI Clone Engine
               </small>
             </div>
             <div
               className={`clk font-mono font-semibold text-2xl px-3 py-1.5 rounded min-w-[96px] text-center transition-colors ${
-                turn !== humanColor && gameStatus === 'in_progress'
+                (isWaitingForBot || turn !== humanColor) && (gameStatus === 'in_progress' || gameStatus === 'active')
                   ? 'bg-white text-black shadow-[0_0_15px_rgba(255,255,255,0.4)]'
                   : 'bg-white/5 text-[#8b8b8b]'
               } ${
-                turn !== humanColor &&
+                (isWaitingForBot || turn !== humanColor) &&
                 (humanColor === 'white' ? clocks.black : clocks.white) < 20000 &&
-                gameStatus === 'in_progress'
+                (gameStatus === 'in_progress' || gameStatus === 'active')
                   ? '!bg-[#e5484d] !text-white'
                   : ''
               }`}
@@ -559,7 +1015,7 @@ export const Play: React.FC = () => {
                         : 'text-[#ccc]'
                     }`}
                   >
-                    {pair.white?.san || pair.white?.uci || ''}
+                    {formattedMoves[index * 2] || pair.white?.san || pair.white?.uci || ''}
                   </span>
                   <span
                     onClick={() => pair.black && setViewIndex(index * 2 + 1)}
@@ -570,14 +1026,14 @@ export const Play: React.FC = () => {
                         : 'text-[#ccc]'
                     }`}
                   >
-                    {pair.black?.san || pair.black?.uci || ''}
+                    {formattedMoves[index * 2 + 1] || pair.black?.san || pair.black?.uci || ''}
                   </span>
                 </React.Fragment>
               ))}
 
               {gameResult && (
                 <div className="col-span-3 text-center py-2.5 font-mono text-sm font-semibold border-t border-[rgba(255,255,255,0.16)] text-[#2F7BFF]">
-                  {gameResult}
+                  {gameResult} {gameTermination ? `· ${formatTerminationReason(gameTermination)}` : ''}
                 </div>
               )}
             </div>
@@ -623,7 +1079,7 @@ export const Play: React.FC = () => {
           <div className="stat font-mono text-xs flex items-center gap-2.5 px-1 min-h-[22px] text-[#8b8b8b]">
             <span
               className={`led w-2 h-2 rounded-full ${
-                turn !== humanColor && gameStatus === 'in_progress'
+                (isWaitingForBot || turn !== humanColor) && (gameStatus === 'in_progress' || gameStatus === 'active')
                   ? 'bg-[#2F7BFF] shadow-[0_0_10px_#2F7BFF] animate-pulse'
                   : 'bg-white shadow-[0_0_6px_#fff]'
               }`}
@@ -631,9 +1087,11 @@ export const Play: React.FC = () => {
             <span className="truncate">
               {viewIndex !== null
                 ? 'Reviewing — Click ⏭ for live board'
-                : turn !== humanColor && gameStatus === 'in_progress'
+                : (gameStatus === 'completed' || gameResult || gameOverOverlay)
+                ? `Game over · ${formatTerminationReason(gameTermination)} (${gameResult || '½-½'})`
+                : (isWaitingForBot || turn !== humanColor) && (gameStatus === 'in_progress' || gameStatus === 'active')
                 ? `${username} is calculating…`
-                : gameStatus === 'in_progress'
+                : (gameStatus === 'in_progress' || gameStatus === 'active')
                 ? 'Your turn'
                 : statusText}
             </span>
@@ -668,7 +1126,7 @@ export const Play: React.FC = () => {
             </button>
             <button
               onClick={handleResign}
-              disabled={gameStatus !== 'in_progress'}
+              disabled={gameStatus !== 'in_progress' && gameStatus !== 'active'}
               className="btn ghost sm text-xs !p-2 hover:!border-red-500 hover:!text-red-400"
               title="Resign game"
             >
@@ -693,13 +1151,14 @@ export const Play: React.FC = () => {
             </div>
             <div
               className={`clk font-mono font-semibold text-2xl px-3 py-1.5 rounded min-w-[96px] text-center transition-colors ${
-                turn === humanColor && gameStatus === 'in_progress'
+                !isWaitingForBot && turn === humanColor && (gameStatus === 'in_progress' || gameStatus === 'active')
                   ? 'bg-white text-black shadow-[0_0_15px_rgba(255,255,255,0.4)]'
                   : 'bg-white/5 text-[#8b8b8b]'
               } ${
+                !isWaitingForBot &&
                 turn === humanColor &&
                 (humanColor === 'white' ? clocks.white : clocks.black) < 20000 &&
-                gameStatus === 'in_progress'
+                (gameStatus === 'in_progress' || gameStatus === 'active')
                   ? '!bg-[#e5484d] !text-white'
                   : ''
               }`}
@@ -736,31 +1195,6 @@ export const Play: React.FC = () => {
                 >
                   <b className="block font-head text-lg text-white font-bold">{tc.label}</b>
                   <small className="text-[10px] text-[#8b8b8b] block">{tc.sub}</small>
-                </button>
-              ))}
-            </div>
-
-            {/* Opponent strength */}
-            <div className="font-mono text-[11px] text-[#8b8b8b] uppercase tracking-wider mb-2">
-              Opponent Strength
-            </div>
-            <div className="grid grid-cols-3 gap-2 mb-4">
-              {[
-                { lvl: 1, label: 'Rookie' },
-                { lvl: 2, label: 'Club' },
-                { lvl: 3, label: 'Expert' },
-              ].map((s) => (
-                <button
-                  key={s.lvl}
-                  type="button"
-                  onClick={() => setSelectedStrength(s.lvl)}
-                  className={`opt py-2 px-3 rounded border font-mono text-xs text-center transition-all ${
-                    selectedStrength === s.lvl
-                      ? 'border-white text-white shadow-[0_0_12px_rgba(255,255,255,0.2)]'
-                      : 'border-[rgba(255,255,255,0.16)] text-[#8b8b8b] hover:border-[#666]'
-                  }`}
-                >
-                  {s.label}
                 </button>
               ))}
             </div>

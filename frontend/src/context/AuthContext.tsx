@@ -13,7 +13,8 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<{ success: boolean; message: string }>;
+  register: (email: string, password: string) => Promise<{ success: boolean; message: string; dev_otp?: string }>;
+  sendOtp: (email: string) => Promise<{ success: boolean; message: string; dev_otp?: string }>;
   verifyEmail: (email: string, otp_code: string) => Promise<{ success: boolean }>;
   logout: () => void;
 }
@@ -72,14 +73,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const register = async (
     email: string,
     password: string
-  ): Promise<{ success: boolean; message: string }> => {
-    const res = await apiClient.post<{ message: string }>('/api/auth/register', {
+  ): Promise<{ success: boolean; message: string; dev_otp?: string }> => {
+    const res = await apiClient.post<{ message: string; dev_otp?: string }>('/api/auth/register', {
       email,
       password,
     });
     return {
       success: true,
-      message: res.data.message || 'Verification code sent. Check the backend terminal.',
+      message: res.data.message || 'Verification code sent to your email.',
+      dev_otp: res.data.dev_otp,
+    };
+  };
+
+  const sendOtp = async (
+    email: string
+  ): Promise<{ success: boolean; message: string; dev_otp?: string }> => {
+    const res = await apiClient.post<{ message: string; dev_otp?: string }>('/api/auth/send-otp', {
+      email,
+    });
+    return {
+      success: true,
+      message: res.data.message || 'Verification code sent to your email.',
+      dev_otp: res.data.dev_otp,
     };
   };
 
@@ -110,7 +125,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ token, user, loading, login, register, verifyEmail, logout }}>
+    <AuthContext.Provider value={{ token, user, loading, login, register, sendOtp, verifyEmail, logout }}>
       {children}
     </AuthContext.Provider>
   );

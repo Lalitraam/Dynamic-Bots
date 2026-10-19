@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import apiClient from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { NORECT_LOGO, svgToUri } from '../utils/logo';
+import { LightFallBackground } from '../components/LightFallBackground';
 
 export interface Bot {
   username: string;
@@ -14,6 +15,8 @@ export interface Bot {
   games_used: number | null;
   tier: string | null;
   error: string | null;
+  job_step?: string | null;
+  job_progress?: number | null;
 }
 
 export const Home: React.FC = () => {
@@ -27,21 +30,34 @@ export const Home: React.FC = () => {
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
 
-  const fetchBots = async () => {
+  const fetchBots = async (showLoader = false) => {
     try {
-      setLoading(true);
+      if (showLoader) setLoading(true);
       const res = await apiClient.get<Bot[]>('/api/bots');
       setBots(res.data);
     } catch (err: any) {
       console.error('Failed to fetch bots:', err);
     } finally {
-      setLoading(false);
+      if (showLoader) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchBots();
+    fetchBots(true);
   }, []);
+
+  useEffect(() => {
+    const hasPending = bots.some(
+      (b) => b.status === 'queued' || b.status === 'building'
+    );
+    if (!hasPending) return;
+
+    const timer = setInterval(() => {
+      fetchBots(false);
+    }, 3000);
+
+    return () => clearInterval(timer);
+  }, [bots]);
 
   const handleCreateBot = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,14 +89,8 @@ export const Home: React.FC = () => {
 
   return (
     <div className="min-h-screen relative bg-black text-white selection:bg-blue-600 selection:text-white">
-      {/* Background violet light effect from Play design */}
-      <div className="fx pointer-events-none" aria-hidden="true">
-        <div className="pool" />
-        <div className="beam">
-          <i />
-          <i className="b" />
-        </div>
-      </div>
+      {/* Background Light Fall graphics matching reference screenshot */}
+      <LightFallBackground />
 
       {/* Header */}
       <header className="relative z-10 flex justify-between items-center px-[clamp(20px,4vw,48px)] py-4 border-b border-[rgba(255,255,255,0.1)]">
@@ -187,7 +197,7 @@ export const Home: React.FC = () => {
                       className={`font-mono text-[11px] px-2.5 py-1 rounded-full border ${
                         bot.status === 'ready'
                           ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/60'
-                          : bot.status === 'error'
+                          : bot.status === 'failed' || bot.status === 'error'
                           ? 'bg-rose-950/40 text-rose-400 border-rose-800/60'
                           : 'bg-amber-950/40 text-amber-400 border-amber-800/60 animate-pulse'
                       }`}
@@ -195,6 +205,33 @@ export const Home: React.FC = () => {
                       {bot.status}
                     </span>
                   </div>
+
+                  {/* Pipeline Progress Display */}
+                  {(bot.status === 'building' || bot.status === 'queued') && (
+                    <div className="my-3 p-3 rounded-lg bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.08)]">
+                      <div className="flex justify-between items-center text-[11px] font-mono mb-1.5">
+                        <span className="text-[#8b8b8b] truncate max-w-[190px]" title={bot.job_step || 'Processing'}>
+                          {bot.job_step || (bot.status === 'queued' ? 'Queued in pipeline' : 'Building model...')}
+                        </span>
+                        <span className="text-[#2F7BFF] font-semibold">
+                          {Math.round((bot.job_progress ?? 0) * 100)}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-[rgba(255,255,255,0.08)] h-1.5 rounded-full overflow-hidden">
+                        <div
+                          className="bg-gradient-to-r from-[#2F7BFF] to-[#38bdf8] h-full rounded-full transition-all duration-500 ease-out"
+                          style={{ width: `${Math.max(5, Math.min(100, Math.round((bot.job_progress ?? 0) * 100)))}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {bot.status === 'failed' && (
+                    <div className="my-3 p-2.5 rounded-lg bg-rose-950/20 border border-rose-800/40 text-[11px] font-mono text-rose-300">
+                      <div className="font-semibold text-rose-400 mb-0.5">Build Failed</div>
+                      <p className="truncate text-[10px] text-rose-400/80">{bot.error || 'Pipeline encountered an error'}</p>
+                    </div>
+                  )}
 
                   {/* Bot metrics */}
                   <div className="grid grid-cols-2 gap-2 my-4 pt-3 border-t border-[rgba(255,255,255,0.08)] font-mono text-xs text-[#8b8b8b]">
@@ -212,10 +249,21 @@ export const Home: React.FC = () => {
                 {/* Actions */}
                 <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-[rgba(255,255,255,0.08)]">
                   <button
-                    onClick={() => navigate(`/play/${bot.username}`)}
-                    className="btn main sm"
+                    onClick={() => bot.status === 'ready' && navigate(`/play/${bot.username}`)}
+                    disabled={bot.status !== 'ready'}
+                    className={`btn main sm ${
+                      bot.status !== 'ready'
+                        ? 'opacity-50 cursor-not-allowed pointer-events-none'
+                        : ''
+                    }`}
                   >
-                    Play
+                    {bot.status === 'building'
+                      ? 'Building...'
+                      : bot.status === 'queued'
+                      ? 'Queued'
+                      : bot.status === 'failed'
+                      ? 'Failed'
+                      : 'Play'}
                   </button>
                   <button
                     onClick={() => navigate(`/dashboard/${bot.username}`)}

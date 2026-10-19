@@ -235,7 +235,27 @@ def extract_samples(username: str) -> tuple[list[dict[str, Any]], dict[str, int]
         if not game_has_target_moves:
             drop_stats["no_target_moves"] += 1
 
-        samples.extend(game_rows)
+        # Quality filtering: remove games with extreme time anomalies or obvious blunders
+        filtered_game_rows = []
+        for row in game_rows:
+            # Skip games where player lost on time or made premature resignations
+            if row.get('termination') in ['timeforfeit', 'resigned']:
+                continue
+            # Skip games with abnormally low move times (premoves) or extremely high times
+            # Only check if we have time_spent_s data
+            time_spent = row.get('time_spent_s')
+            if time_spent is not None:
+                # Skip moves with less than 50ms (likely premoves/accidental clicks)
+                # or more than 300 seconds (5 minutes per move - likely disconnected)
+                if time_spent < 0.05 or time_spent > 300:
+                    continue
+            filtered_game_rows.append(row)
+
+        samples.extend(filtered_game_rows)
+
+        # Track filtered games for debugging
+        if len(filtered_game_rows) < len(game_rows):
+            drop_stats["quality_filtered"] = drop_stats.get("quality_filtered", 0) + (len(game_rows) - len(filtered_game_rows))
 
     return samples, drop_stats
 

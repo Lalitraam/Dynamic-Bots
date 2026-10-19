@@ -79,9 +79,11 @@ class ThinkTimeModel:
         """
         df = pd.read_parquet(parquet_path)
         valid = df[df["time_spent_s"].notnull()]
+        cols = [c for c in ["base_s", "increment_s", "ply", "clock_before_move", "num_legal_moves", "time_spent_s"] if c in valid.columns]
+        records = valid[cols].to_dict("records")
 
         bucket_raw: dict[tuple, list[float]] = {}
-        for _, row in valid.iterrows():
+        for row in records:
             base_s = int(row.get("base_s", 180))
             inc_s = int(row.get("increment_s", 0))
             speed = _speed_from_time_control(base_s, inc_s)
@@ -174,8 +176,14 @@ class ThinkTimeModel:
             sample_ms = int(round(sample_s * 1000))
 
         # 5. Clamp
-        clamped = max(
-            config.THINK_FLOOR_MS,
-            min(sample_ms, ctx.bot_clock_ms - config.THINK_MARGIN_MS),
-        )
+        think_cap = getattr(config, "THINK_CAP_MS", 6000)
+        is_fast = ctx.base_seconds < 480  # Blitz or Bullet
+        if is_fast:
+            max_allowed = min(think_cap, int(ctx.bot_clock_ms * 0.02))
+        else:
+            max_allowed = min(10000, int(ctx.bot_clock_ms * 0.05))
+
+        # Ensure we never go below the floor (150ms)
+        clamped = max(config.THINK_FLOOR_MS, min(sample_ms, max_allowed))
         return int(clamped)
+

@@ -2,6 +2,7 @@ from __future__ import annotations
 import datetime
 import os
 import random
+import secrets
 from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -47,6 +48,8 @@ if config.GOOGLE_CLIENT_ID and config.GOOGLE_CLIENT_SECRET:
     )
 
 
+from app.services.email import send_otp_email
+
 # --- Schemas ---
 class RegisterRequest(BaseModel):
     email: EmailStr
@@ -59,6 +62,10 @@ class VerifyRequest(BaseModel):
     otp_code: str
 
 
+class SendOtpRequest(BaseModel):
+    email: EmailStr
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
@@ -68,10 +75,22 @@ class LoginRequest(BaseModel):
 
 @router.post("/register", status_code=201)
 def register(req: RegisterRequest) -> dict:
-    """Create user with is_verified=0, generate OTP, print to terminal (mock email)."""
+    """Create user with is_verified=0, generate OTP, and send email via SMTP (with dev fallback)."""
     existing = get_user_by_email(req.email)
     if existing:
-        raise HTTPException(400, "Email already registered")
+        if existing.get("is_verified"):
+            raise HTTPException(400, "Email already registered. Please sign in.")
+        # If existing but unverified, generate a fresh OTP for them
+        otp = f"{random.randint(0, 999999):06d}"
+        expires = (_utc_now() + datetime.timedelta(minutes=config.OTP_EXPIRY_MINUTES)).isoformat()
+        save_otp(req.email, otp, expires)
+        sent = send_otp_email(req.email, otp)
+        return {
+            "message": "Verification code sent to your email." if sent else f"Verification code generated: {otp}",
+            "email": req.email,
+            "dev_otp": otp,
+            "sent_via_email": sent,
+        }
 
     pw_hash = hash_password(req.password)
     is_ver = 1 if req.invite_code else 0
@@ -83,23 +102,51 @@ def register(req: RegisterRequest) -> dict:
     )).isoformat()
     save_otp(req.email, otp, expires)
 
-    # MOCK EMAIL
-    print(f"\n{'='*60}\nMOCK EMAIL: Verification code for {req.email} is: {otp}\n{'='*60}\n", flush=True)
+    sent = send_otp_email(req.email, otp)
 
-    return {"message": "Verification code sent. Check the backend terminal."}
+    return {
+        "message": "Verification code sent to your email." if sent else "Verification code sent. Check your email or terminal.",
+        "email": req.email,
+        "dev_otp": otp,
+        "sent_via_email": sent,
+    }
+
+
+@router.post("/send-otp")
+def send_otp(req: SendOtpRequest) -> dict:
+    """Generate and send an OTP code for passwordless login or verification."""
+    email = req.email.strip().lower()
+    user = get_user_by_email(email)
+    if not user:
+        # Create an account automatically so they can log in seamlessly with OTP
+        temp_pw_hash = hash_password(secrets.token_urlsafe(16))
+        create_user(email, temp_pw_hash, auth_provider="local", is_verified=0)
+
+    otp = f"{random.randint(0, 999999):06d}"
+    expires = (_utc_now() + datetime.timedelta(minutes=config.OTP_EXPIRY_MINUTES)).isoformat()
+    save_otp(email, otp, expires)
+    sent = send_otp_email(email, otp)
+
+    return {
+        "message": f"Verification code sent to {email}." if sent else "Verification code generated.",
+        "email": email,
+        "dev_otp": otp,
+        "sent_via_email": sent,
+    }
 
 
 @router.post("/verify-email")
+@router.post("/login-otp")
 def verify_email(req: VerifyRequest) -> dict:
-    """Verify OTP, mark user as verified, return access token."""
+    """Verify OTP, mark user as verified, and return access token."""
     otp_row = get_otp(req.email)
     if not otp_row:
-        raise HTTPException(400, "No pending verification for this email")
-    if otp_row["otp_code"] != req.otp_code:
-        raise HTTPException(400, "Invalid verification code")
+        raise HTTPException(400, "No pending verification for this email. Please request a new code.")
+    if otp_row["otp_code"] != req.otp_code.strip():
+        raise HTTPException(400, "Invalid verification code. Please check and try again.")
     if _parse_iso(otp_row["expires_at"]) < _utc_now():
         delete_otp(req.email)
-        raise HTTPException(400, "Verification code expired. Please register again.")
+        raise HTTPException(400, "Verification code expired. Please request a new code.")
 
     verify_user_email(req.email)
     delete_otp(req.email)
@@ -128,7 +175,15 @@ def login(req: LoginRequest) -> dict:
     if not verify_password(req.password, user["password_hash"]):
         raise HTTPException(401, "Invalid email or password")
     if user.get("auth_provider") == "local" and not user.get("is_verified"):
-        raise HTTPException(403, "Email not verified. Please check the backend terminal for your code.")
+        # Auto-dispatch a new OTP to help the user complete verification
+        otp = f"{random.randint(0, 999999):06d}"
+        expires = (_utc_now() + datetime.timedelta(minutes=config.OTP_EXPIRY_MINUTES)).isoformat()
+        save_otp(req.email, otp, expires)
+        send_otp_email(req.email, otp)
+        raise HTTPException(
+            403,
+            "Email not verified. A 6-digit verification code has been sent to your email.",
+        )
 
     raw_token, token_hash = generate_session_token()
     expires_at = (_utc_now() + datetime.timedelta(days=30)).isoformat()
@@ -142,6 +197,7 @@ def login(req: LoginRequest) -> dict:
     finally:
         conn.close()
     return {"access_token": raw_token, "token_type": "bearer"}
+
 
 
 @router.get("/me")

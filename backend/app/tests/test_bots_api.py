@@ -5,7 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import config
-from app.db.migrate import run_migrations
+from app.db.migrate import get_db, run_migrations
+from app.db.jobs import update_job
 from app.db.users import create_invite_code
 from app.main import app
 from app.routers import bots
@@ -128,4 +129,37 @@ def test_create_and_play_game(auth_client: TestClient, monkeypatch: pytest.Monke
     assert move_data["moves"][0]["uci"] == "e2e4"
     assert move_data["moves"][1]["by"] == "bot"
     assert move_data["status"] == "active"
+
+
+def test_bot_job_progress_tracking(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    """Test that get_user_bots returns the latest job step and progress."""
+    monkeypatch.setattr(bots, "check_lichess_user_exists", lambda u: True)
+    resp = auth_client.post("/api/bots", json={"username": "magnus"})
+    assert resp.status_code == 201
+
+    # Initially, newly queued bot has job_step="queued" and job_progress=0.0
+    list_resp = auth_client.get("/api/bots")
+    assert list_resp.status_code == 200
+    bots_list = list_resp.json()
+    assert len(bots_list) == 1
+    assert bots_list[0]["username"] == "magnus"
+    assert bots_list[0]["job_step"] == "queued"
+    assert bots_list[0]["job_progress"] == 0.0
+
+    # Simulate worker updating the job
+    conn = get_db()
+    try:
+        job_row = conn.execute("SELECT id FROM jobs WHERE username = 'magnus' ORDER BY id DESC LIMIT 1;").fetchone()
+        assert job_row is not None
+        update_job(conn, job_row["id"], step="Downloading games from Lichess", progress=0.1)
+    finally:
+        conn.close()
+
+    # Now get_user_bots should reflect updated step and progress
+    updated_resp = auth_client.get("/api/bots")
+    assert updated_resp.status_code == 200
+    updated_list = updated_resp.json()
+    assert updated_list[0]["job_step"] == "Downloading games from Lichess"
+    assert pytest.approx(updated_list[0]["job_progress"]) == 0.1
+
 

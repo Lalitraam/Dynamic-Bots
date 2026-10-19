@@ -12,6 +12,7 @@ from app.engine.model_cache import ModelCache
 from app.engine.provider import MoveContext, MoveDecision
 from app.engine.provider_v3 import (
     V3Provider,
+    _apply_top_k,
     _apply_top_p,
     _build_board_planes,
     _build_meta,
@@ -207,4 +208,18 @@ def test_7_provider_decision_includes_p_err():
         decision = provider.decide(ctx, random.Random(42))
         assert decision.p_err is not None
         assert 0.0 <= decision.p_err <= 1.0
+
+
+def test_8_top_k_filter_keeps_top_k_moves():
+    probs = np.array([0.55, 0.22, 0.12, 0.06, 0.03, 0.01, 0.01])
+    filtered = _apply_top_k(probs, k=3)
+
+    assert np.isclose(filtered[0], 0.55)
+    assert np.isclose(filtered[1], 0.22)
+    assert np.isclose(filtered[2], 0.12)
+    assert filtered[3] == 0.0
+    assert filtered[4] == 0.0
+    assert filtered[5] == 0.0
+    assert filtered[6] == 0.0
+
 
