@@ -355,7 +355,7 @@ export const Landing: React.FC = () => {
   }, []);
 
   return (
-    <div className="min-h-screen relative overflow-x-hidden bg-black text-white selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen relative overflow-x-hidden bg-black text-white selection:bg-blue-600 selection:text-white flex flex-col justify-between">
       {/* Header */}
       <header className="relative z-10 flex justify-between items-center px-[clamp(20px,5vw,64px)] py-5">
         <img
@@ -406,7 +406,7 @@ export const Landing: React.FC = () => {
       </header>
 
       {/* Main Hero */}
-      <main className="relative z-10 grid grid-cols-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] items-center min-h-[calc(100vh-100px)] px-[clamp(20px,5vw,64px)]">
+      <main className="relative z-10 grid grid-cols-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] items-center flex-1 px-[clamp(20px,5vw,64px)] py-6">
         <section className="py-5">
           <div className="font-mono text-xs text-[#8b8b8b] flex gap-2.5 items-center mb-6">
             <b className="w-[7px] h-[7px] rounded-full bg-white shadow-[0_0_10px_#fff] animate-[blink_2s_infinite]"></b>
@@ -463,6 +463,78 @@ export const Landing: React.FC = () => {
           </div>
         </section>
       </main>
+
+      {/* Tech Developer Attribution Footer */}
+      <footer className="relative z-10 border-t border-[rgba(255,255,255,0.08)] bg-black/80 backdrop-blur-md px-[clamp(20px,5vw,64px)] py-4 mt-auto">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 font-mono text-xs">
+          <div className="flex items-center gap-3 text-[#8b8b8b]">
+            <span className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-[#777]">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#2F7BFF] shadow-[0_0_8px_#2F7BFF] animate-pulse" />
+              SYS.BUILD // v1.0.4
+            </span>
+            <span className="text-white/20">|</span>
+            <span className="text-[11px] uppercase tracking-widest text-[#a3a3a3]">
+              DEVELOPED BY
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <a
+              href="https://github.com/abhx12"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="GitHub profile of abhx12"
+              className="group flex items-center gap-2 px-3 py-1.5 rounded border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.02)] hover:border-[#2F7BFF] hover:bg-[rgba(47,123,255,0.08)] hover:shadow-[0_0_16px_rgba(47,123,255,0.35)] transition-all duration-200"
+            >
+              <svg
+                className="w-3.5 h-3.5 text-[#8b8b8b] group-hover:text-white transition-colors"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <path
+                  fillRule="evenodd"
+                  clipRule="evenodd"
+                  d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
+                />
+              </svg>
+              <span className="font-mono text-xs tracking-tight text-white group-hover:text-blue-200">
+                abhx12
+              </span>
+              <span className="text-[10px] text-[#2F7BFF] opacity-50 group-hover:opacity-100 transition-opacity">
+                ↗
+              </span>
+            </a>
+
+            <span className="text-[#555] font-mono text-xs select-none">&amp;</span>
+
+            <a
+              href="https://github.com/Lalitraam"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="GitHub profile of Lalitraam"
+              className="group flex items-center gap-2 px-3 py-1.5 rounded border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.02)] hover:border-[#2F7BFF] hover:bg-[rgba(47,123,255,0.08)] hover:shadow-[0_0_16px_rgba(47,123,255,0.35)] transition-all duration-200"
+            >
+              <svg
+                className="w-3.5 h-3.5 text-[#8b8b8b] group-hover:text-white transition-colors"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <path
+                  fillRule="evenodd"
+                  clipRule="evenodd"
+                  d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
+                />
+              </svg>
+              <span className="font-mono text-xs tracking-tight text-white group-hover:text-blue-200">
+                Lalitraam
+              </span>
+              <span className="text-[10px] text-[#2F7BFF] opacity-50 group-hover:opacity-100 transition-opacity">
+                ↗
+              </span>
+            </a>
+          </div>
+        </div>
+      </footer>
 
       {/* Glow Cursor elements */}
       <div
