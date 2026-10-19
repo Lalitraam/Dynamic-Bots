@@ -37,7 +37,12 @@ def _prepare_val_dataset(val_parquet: Any) -> Dataset:
 
     df = pd.read_parquet(p)
     if "split" in df.columns:
-        if df["split"].dtype == object:
+        is_string_split = (
+            df["split"].dtype == object
+            or pd.api.types.is_string_dtype(df["split"])
+            or (not df["split"].empty and isinstance(df["split"].dropna().iloc[0], str))
+        )
+        if is_string_split:
             df = df[df["split"] == "val"]
         else:
             df = df[df["split"] == 1]

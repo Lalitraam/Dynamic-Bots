@@ -156,7 +156,12 @@ def load_dataset_from_shards(shards_dir: Path, split: str) -> Dataset:
 
     # Filter by split
     if "split" in merged.columns:
-        if merged["split"].dtype == object:
+        is_string_split = (
+            merged["split"].dtype == object
+            or pd.api.types.is_string_dtype(merged["split"])
+            or (not merged["split"].empty and isinstance(merged["split"].dropna().iloc[0], str))
+        )
+        if is_string_split:
             subset = merged[merged["split"] == split]
         else:
             split_map = {"train": 0, "val": 1, "test": 2}

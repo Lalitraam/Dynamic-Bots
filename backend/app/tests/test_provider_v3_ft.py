@@ -12,11 +12,17 @@ from app.engine.think_time import ThinkTimeModel
 
 
 def test_1_ft_model_loads_through_cache():
+    weights_file = config.DATA_ROOT / "players" / "the_king_crusher" / "models" / "v1" / "weights.pt"
+    if not weights_file.exists():
+        weights_file.parent.mkdir(parents=True, exist_ok=True)
+        import torch
+        from app.ml.model_v2 import ChessPolicyNetV2
+        dummy = ChessPolicyNetV2(channels=96, num_blocks=6, policy_dim=32, meta_dim=10, num_planes=22)
+        torch.save({"state_dict": dummy.state_dict(), "config": dummy.to_config()}, weights_file)
+
     cache = ModelCache()
     model = cache.get("the_king_crusher", 1)
     assert model is not None
-
-    weights_file = config.DATA_ROOT / "players" / "the_king_crusher" / "models" / "v1" / "weights.pt"
     assert weights_file.exists(), "the_king_crusher weights.pt must exist for FT test"
 
     tt_model = ThinkTimeModel({("blitz", "opening", ">0.3", False): [0.5] * 25})

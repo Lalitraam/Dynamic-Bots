@@ -89,8 +89,24 @@ def test_6_sample_clamps_to_clock():
     assert think_ms >= config.THINK_FLOOR_MS
 
 
-def test_7_reservoir_sampling_deterministic():
+def test_7_reservoir_sampling_deterministic(tmp_path: Path):
     p = Path("../data/players/the_king_crusher/samples_v3.parquet")
+    if not p.exists():
+        import pandas as pd
+        p = tmp_path / "samples_v3.parquet"
+        df = pd.DataFrame([
+            {
+                "base_s": 180,
+                "increment_s": 2,
+                "ply": i,
+                "clock_before_move": 150.0 - i,
+                "num_legal_moves": 20,
+                "time_spent_s": 1.5 + (i % 3),
+            }
+            for i in range(120)
+        ])
+        df.to_parquet(p)
+
     m1 = ThinkTimeModel.from_parquet(p, max_samples_per_bucket=50, seed=0)
     m2 = ThinkTimeModel.from_parquet(p, max_samples_per_bucket=50, seed=0)
     assert set(m1.buckets.keys()) == set(m2.buckets.keys())

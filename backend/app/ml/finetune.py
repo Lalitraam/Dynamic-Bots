@@ -160,7 +160,12 @@ def _resolve_dataset(source: Any, split_name: str = "train") -> Dataset:
 
     df = pd.read_parquet(p)
     if "split" in df.columns:
-        if df["split"].dtype == object:
+        is_string_split = (
+            df["split"].dtype == object
+            or pd.api.types.is_string_dtype(df["split"])
+            or (not df["split"].empty and isinstance(df["split"].dropna().iloc[0], str))
+        )
+        if is_string_split:
             df = df[df["split"] == split_name]
         else:
             split_map = {"train": 0, "val": 1, "test": 2}
