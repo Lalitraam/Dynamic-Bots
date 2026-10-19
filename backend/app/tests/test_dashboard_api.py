@@ -17,6 +17,11 @@ def client():
 
 
 def _ensure_king_crusher_fixture():
+    from app.db.players import get_player_median_rating
+    from app.routers.dashboard import _dashboard_cache
+    _dashboard_cache.clear()
+    get_player_median_rating.cache_clear()
+
     p_dir = Path(config.DATA_ROOT) / "players" / "the_king_crusher"
     if (p_dir / "samples_v3.parquet").exists() and (p_dir / "models" / "v1" / "eval.json").exists():
         return
