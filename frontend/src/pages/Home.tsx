@@ -29,6 +29,9 @@ export const Home: React.FC = () => {
   const [newBotUsername, setNewBotUsername] = useState('');
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
+  const [botToDelete, setBotToDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const fetchBots = async (showLoader = false) => {
     try {
@@ -84,6 +87,21 @@ export const Home: React.FC = () => {
       setModalError(String(detail));
     } finally {
       setModalLoading(false);
+    }
+  };
+
+  const confirmDeleteBot = async () => {
+    if (!botToDelete) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await apiClient.delete(`/api/bots/${encodeURIComponent(botToDelete)}`);
+      setBots((prev) => prev.filter((b) => b.username !== botToDelete));
+      setBotToDelete(null);
+    } catch (err: any) {
+      setDeleteError(String(err?.response?.data?.detail || 'Failed to delete bot.'));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -247,29 +265,40 @@ export const Home: React.FC = () => {
                 </div>
 
                 {/* Actions */}
-                <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-[rgba(255,255,255,0.08)]">
+                <div className="mt-4 pt-4 border-t border-[rgba(255,255,255,0.08)] space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => bot.status === 'ready' && navigate(`/play/${bot.username}`)}
+                      disabled={bot.status !== 'ready'}
+                      className={`btn main sm ${
+                        bot.status !== 'ready'
+                          ? 'opacity-50 cursor-not-allowed pointer-events-none'
+                          : ''
+                      }`}
+                    >
+                      {bot.status === 'building'
+                        ? 'Building...'
+                        : bot.status === 'queued'
+                        ? 'Queued'
+                        : bot.status === 'failed'
+                        ? 'Failed'
+                        : 'Play'}
+                    </button>
+                    <button
+                      onClick={() => navigate(`/dashboard/${bot.username}`)}
+                      className="btn ghost sm"
+                    >
+                      Dashboard
+                    </button>
+                  </div>
                   <button
-                    onClick={() => bot.status === 'ready' && navigate(`/play/${bot.username}`)}
-                    disabled={bot.status !== 'ready'}
-                    className={`btn main sm ${
-                      bot.status !== 'ready'
-                        ? 'opacity-50 cursor-not-allowed pointer-events-none'
-                        : ''
-                    }`}
+                    onClick={() => {
+                      setDeleteError(null);
+                      setBotToDelete(bot.username);
+                    }}
+                    className="btn ghost sm full text-rose-400 border-rose-800/60"
                   >
-                    {bot.status === 'building'
-                      ? 'Building...'
-                      : bot.status === 'queued'
-                      ? 'Queued'
-                      : bot.status === 'failed'
-                      ? 'Failed'
-                      : 'Play'}
-                  </button>
-                  <button
-                    onClick={() => navigate(`/dashboard/${bot.username}`)}
-                    className="btn ghost sm"
-                  >
-                    Dashboard
+                    Delete Bot
                   </button>
                 </div>
               </div>
@@ -340,6 +369,47 @@ export const Home: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {botToDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+          onClick={() => !deleting && setBotToDelete(null)}
+        >
+          <div
+            className="bg-[#080808] border border-[rgba(255,255,255,0.2)] rounded-xl w-full max-w-[400px] p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="font-head font-bold text-xl mb-2">Delete bot?</h2>
+            <p className="text-xs text-[#8b8b8b] font-mono leading-relaxed mb-4">
+              Do you really want to delete <span className="text-white">{botToDelete}</span>? This can't be undone.
+            </p>
+
+            {deleteError && (
+              <div className="font-mono text-xs text-red-400 bg-red-950/20 border border-red-900/40 p-2.5 rounded mb-4">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setBotToDelete(null)}
+                disabled={deleting}
+                className="btn ghost full"
+              >
+                No
+              </button>
+              <button
+                onClick={confirmDeleteBot}
+                disabled={deleting}
+                className="btn main full"
+              >
+                {deleting ? 'Deleting…' : 'Yes, delete'}
+              </button>
+            </div>
           </div>
         </div>
       )}

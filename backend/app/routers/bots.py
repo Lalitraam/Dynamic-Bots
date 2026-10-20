@@ -209,3 +209,30 @@ def archive_bot(username: str, user: dict[str, Any] = Depends(get_current_user))
         return {"username": clean_username, "archived": True}
     finally:
         conn.close()
+
+@router.delete("/{username}", response_model=dict[str, Any])
+def delete_bot(username: str, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """Delete a bot from the user's account."""
+    name = username.strip()
+    conn = get_db()
+    try:
+        row = conn.execute(
+            """SELECT p.status FROM user_bots ub
+               JOIN players p ON p.username = ub.username
+               WHERE ub.user_id = ? AND ub.username = ?;""",
+            (user["id"], name),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"Bot '{name}' not found")
+        if row["status"] == "building":
+            raise HTTPException(status_code=400, detail="Bot is being built right now. Try again once it finishes or fails.")
+
+        with conn:
+            conn.execute("DELETE FROM user_bots WHERE user_id = ? AND username = ?;", (user["id"], name))
+            # Remove the shared player record only if no other user has this bot
+            others = conn.execute("SELECT 1 FROM user_bots WHERE username = ? LIMIT 1;", (name,)).fetchone()
+            if others is None:
+                conn.execute("DELETE FROM players WHERE username = ?;", (name,))
+        return {"username": name, "deleted": True}
+    finally:
+        conn.close()
